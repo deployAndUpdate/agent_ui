@@ -1,0 +1,21 @@
+{
+  "name": "@visual-engine/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "visual-agent": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "start": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@visual-engine/shared": "*",
+    "tsx": "^4.19.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ActionLogProps",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "at": { "type": "string" },
+          "text": { "type": "string" }
+        },
+        "required": ["at", "text"]
+      }
+    }
+  },
+  "required": ["entries"]
+}

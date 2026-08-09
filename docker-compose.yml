@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: visual
+      POSTGRES_PASSWORD: visual
+      POSTGRES_DB: visual_engine
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U visual -d visual_engine"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      PORT: "3001"
+      DATABASE_URL: postgres://visual:visual@postgres:5432/visual_engine
+      API_KEYS: ${API_KEYS:-dev-key}
+      AUTH_ENABLED: "true"
+      CORS_ORIGIN: "*"
+      LOG_LEVEL: info
+      OUTBOX_INTERVAL_MS: "100"
+      OUTBOX_MAX_ATTEMPTS: "5"
+      RATE_LIMIT_MAX: "300"
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

@@ -1,0 +1,14 @@
+{
+  "taskId": "req_88231",
+  "operation": "SYNC_BOARD",
+  "layout": {
+    "widgets": [
+      {
+        "widgetId": "w_01",
+        "type": "MetricCard",
+        "size": { "w": 99, "h": 2 },
+        "props": { "title": "Broken" }
+      }
+    ]
+  }
+}

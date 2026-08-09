@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DashboardManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Уникальный идентификатор сессии задачи"
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["SYNC_DASHBOARD", "ADD_WIDGET", "UPDATE_WIDGET", "REMOVE_WIDGET"],
+      "description": "Тип операции с бордой"
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "widgets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "widgetId": { "type": "string", "minLength": 1 },
+              "type": {
+                "type": "string",
+                "enum": ["MetricCard", "DataChart", "ActionLog", "DataTable"]
+              },
+              "size": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "w": { "type": "integer", "minimum": 1, "maximum": 12 },
+                  "h": { "type": "integer", "minimum": 1, "maximum": 6 }
+                },
+                "required": ["w", "h"]
+              },
+              "props": {
+                "type": "object",
+                "description": "Специфичные данные для конкретного компонента"
+              }
+            },
+            "required": ["widgetId", "type", "size", "props"]
+          }
+        }
+      },
+      "required": ["widgets"]
+    }
+  },
+  "required": ["taskId", "operation", "layout"]
+}

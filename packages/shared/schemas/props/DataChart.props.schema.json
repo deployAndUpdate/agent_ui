@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DataChartProps",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "title": { "type": "string" },
+    "series": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "points": {
+            "type": "array",
+            "items": { "type": "number" }
+          }
+        },
+        "required": ["name", "points"]
+      }
+    }
+  },
+  "required": ["title", "series"]
+}

@@ -1,0 +1,24 @@
+{
+  "name": "visual-engine",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "test:shared": "npm test -w @visual-engine/shared",
+    "test:backend": "npm test -w backend",
+    "test:frontend": "npm test -w frontend",
+    "test:cli": "npm test -w @visual-engine/cli",
+    "test:e2e": "npm run test:e2e -w frontend",
+    "dev:backend": "npm run dev -w backend",
+    "dev:frontend": "npm run dev -w frontend",
+    "agent": "npm run start -w @visual-engine/cli --",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
