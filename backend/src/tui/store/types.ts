@@ -35,6 +35,8 @@ export interface TuiStoredAction {
 
 export interface TuiStore {
   saveSessionWithOutbox(input: TuiSaveInput): Promise<TuiSaveResult>;
+  /** Push a render to the outbox without changing the persisted session snapshot. */
+  enqueueOutbox(sessionId: string, manifest: TuiManifest): Promise<TuiOutboxEvent>;
   getSession(sessionId: string): Promise<TuiSessionSnapshot | null>;
   listPendingOutbox(): Promise<TuiOutboxEvent[]>;
   markOutboxSent(id: string): Promise<void>;

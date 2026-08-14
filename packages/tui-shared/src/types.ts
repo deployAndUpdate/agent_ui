@@ -28,6 +28,7 @@ export interface TuiUserAction {
   event: 'USER_ACTION';
   taskId: string;
   widgetId: string;
+  /** Known: select_row | navigate_back (extensible string). */
   action: string;
   payload: Record<string, unknown>;
 }

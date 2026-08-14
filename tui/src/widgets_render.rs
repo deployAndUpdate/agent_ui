@@ -1,12 +1,14 @@
+use ratatui::layout::Constraint;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Axis, Block, Borders, Cell, Chart, Dataset, Gauge, GraphType, List, ListItem, Paragraph, Row,
-    Table, Wrap,
+    Axis, Block, Borders, Cell, Chart, Dataset, Gauge, GraphType, List, ListItem, ListState,
+    Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
 };
 use ratatui::Frame;
 
+use crate::content_measure::{table_col_maxes, wrap_line_count};
 use crate::model::{
     ChartProps, GaugeProps, ListProps, ParagraphProps, TableProps, TuiChunk,
 };
@@ -19,6 +21,17 @@ const SERIES_COLORS: [Color; 6] = [
     Color::Blue,
     Color::LightRed,
 ];
+
+pub struct ChunkRenderOpts {
+    /// Idle Tab focus (cyan).
+    pub focused: bool,
+    /// Browse / TableInteract yellow hover.
+    pub hovered: bool,
+    /// TableInteract active.
+    pub active: bool,
+    pub scroll: u16,
+    pub selected_row: Option<usize>,
+}
 
 pub fn style_name_to_color(name: Option<&str>) -> Color {
     match name.map(|s| s.to_ascii_lowercase()).as_deref() {
@@ -33,71 +46,173 @@ pub fn style_name_to_color(name: Option<&str>) -> Color {
     }
 }
 
-fn titled_block(title: impl Into<String>, focused: bool) -> Block<'static> {
-    let title = title.into();
-    let border = if focused {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+#[derive(Clone, Copy)]
+enum BorderTone {
+    Dim,
+    Cyan,
+    Yellow,
+}
+
+fn border_tone(opts: &ChunkRenderOpts) -> BorderTone {
+    if opts.hovered || opts.active {
+        BorderTone::Yellow
+    } else if opts.focused {
+        BorderTone::Cyan
     } else {
-        Style::default().fg(Color::DarkGray)
+        BorderTone::Dim
+    }
+}
+
+fn titled_block(title: impl Into<String>, tone: BorderTone) -> Block<'static> {
+    let title = title.into();
+    let (border, title_style) = match tone {
+        BorderTone::Yellow => (
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        BorderTone::Cyan => (
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        BorderTone::Dim => (
+            Style::default().fg(Color::DarkGray),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
     };
     Block::default()
         .borders(Borders::ALL)
         .border_style(border)
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ))
+        .title(Span::styled(title, title_style))
 }
 
-pub fn render_chunk(frame: &mut Frame, area: ratatui::layout::Rect, chunk: &TuiChunk) {
+fn title_mark(opts: &ChunkRenderOpts, base: String) -> String {
+    if opts.hovered || opts.active {
+        format!("▸ {base}")
+    } else if opts.focused {
+        format!("▸ {base}")
+    } else {
+        base
+    }
+}
+
+pub fn render_chunk(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    opts: &ChunkRenderOpts,
+) {
     match chunk.widget_type.as_str() {
-        "Paragraph" => render_paragraph(frame, area, chunk),
-        "Table" => render_table(frame, area, chunk),
-        "List" => render_list(frame, area, chunk),
-        "Gauge" => render_gauge(frame, area, chunk),
-        "Chart" => render_chart(frame, area, chunk),
+        "Paragraph" => render_paragraph(frame, area, chunk, opts),
+        "Table" => render_table(frame, area, chunk, opts),
+        "List" => render_list(frame, area, chunk, opts),
+        "Gauge" => render_gauge(frame, area, chunk, opts),
+        "Chart" => render_chart(frame, area, chunk, opts),
         other => {
             let msg = format!("unknown type: {other}");
-            let p = Paragraph::new(msg).block(titled_block(&chunk.widget_id, false));
+            let p = Paragraph::new(msg).block(titled_block(&chunk.widget_id, border_tone(opts)));
             frame.render_widget(p, area);
         }
     }
 }
 
-fn render_paragraph(frame: &mut Frame, area: ratatui::layout::Rect, chunk: &TuiChunk) {
-    let props: ParagraphProps = serde_json::from_value(chunk.props.clone()).unwrap_or(ParagraphProps {
-        text: chunk.props.to_string(),
-        title: Some(chunk.widget_id.clone()),
-        style: None,
-    });
+fn render_paragraph(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    opts: &ChunkRenderOpts,
+) {
+    let props: ParagraphProps = serde_json::from_value(chunk.props.clone()).unwrap_or(
+        ParagraphProps {
+            text: chunk.props.to_string(),
+            title: Some(chunk.widget_id.clone()),
+            style: None,
+        },
+    );
     let color = style_name_to_color(props.style.as_deref());
-    let title = props
-        .title
-        .clone()
-        .unwrap_or_else(|| chunk.widget_id.clone());
-    let block = titled_block(title, false).border_style(Style::default().fg(color));
+    let title = title_mark(
+        opts,
+        props
+            .title
+            .clone()
+            .unwrap_or_else(|| chunk.widget_id.clone()),
+    );
+    let mut block = titled_block(title, border_tone(opts));
+    if matches!(border_tone(opts), BorderTone::Dim) {
+        block = block.border_style(Style::default().fg(color));
+    }
+
+    let inner_w = area.width.saturating_sub(2).max(1);
+    let inner_h = area.height.saturating_sub(2).max(1);
+    let total_lines = wrap_line_count(&props.text, inner_w);
+    let max_scroll = total_lines.saturating_sub(inner_h);
+    let scroll = opts.scroll.min(max_scroll);
+
     let para = Paragraph::new(props.text)
         .style(Style::default().fg(color))
         .wrap(Wrap { trim: true })
+        .scroll((scroll, 0))
         .block(block);
     frame.render_widget(para, area);
+
+    if max_scroll > 0 && area.width > 3 {
+        let mut sb_state = ScrollbarState::new(total_lines as usize).position(scroll as usize);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓")),
+            area,
+            &mut sb_state,
+        );
+    }
 }
 
-fn render_table(frame: &mut Frame, area: ratatui::layout::Rect, chunk: &TuiChunk) {
+fn col_constraints(headers: &[String], rows: &[Vec<String>], total_width: u16) -> Vec<Constraint> {
+    let maxes = table_col_maxes(headers, rows);
+    let n = maxes.len().max(1) as u16;
+    let spacing = n.saturating_sub(1);
+    let usable = total_width.saturating_sub(2).saturating_sub(spacing).max(n);
+    let sum: u16 = maxes.iter().sum::<u16>().max(1);
+    maxes
+        .iter()
+        .map(|&m| {
+            let share = ((u32::from(m) * u32::from(usable)) / u32::from(sum)) as u16;
+            let w = share.max(m.min(usable / n).max(3)).min(usable);
+            Constraint::Length(w)
+        })
+        .collect()
+}
+
+fn render_table(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    opts: &ChunkRenderOpts,
+) {
     let Ok(props) = serde_json::from_value::<TableProps>(chunk.props.clone()) else {
-        let p = Paragraph::new("invalid Table props").block(titled_block(&chunk.widget_id, false));
+        let p =
+            Paragraph::new("invalid Table props").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
 
-    let header = Row::new(
-        props
-            .headers
-            .iter()
-            .map(|h| Cell::from(Span::styled(h.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)))),
-    )
+    let title = title_mark(opts, format!("▤ {}", chunk.widget_id));
+
+    let header = Row::new(props.headers.iter().map(|h| {
+        Cell::from(Span::styled(
+            h.clone(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+    }))
     .height(1)
     .bottom_margin(0);
 
@@ -115,71 +230,138 @@ fn render_table(frame: &mut Frame, area: ratatui::layout::Rect, chunk: &TuiChunk
         })
         .collect();
 
-    let widths: Vec<ratatui::layout::Constraint> = if props.headers.is_empty() {
-        vec![ratatui::layout::Constraint::Fill(1)]
+    let widths = col_constraints(&props.headers, &props.rows, area.width);
+    let highlight = if opts.active {
+        Style::default()
+            .bg(Color::Yellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD)
     } else {
-        props
-            .headers
-            .iter()
-            .map(|_| ratatui::layout::Constraint::Fill(1))
-            .collect()
+        Style::default().bg(Color::DarkGray).fg(Color::Cyan)
     };
-
     let table = Table::new(rows, widths)
         .header(header)
-        .block(titled_block(
-            format!("▤ {}", chunk.widget_id),
-            false,
-        ))
+        .block(titled_block(title, border_tone(opts)))
         .column_spacing(1)
-        .row_highlight_style(Style::default().bg(Color::DarkGray).fg(Color::Cyan));
+        .row_highlight_style(highlight);
 
-    frame.render_widget(table, area);
+    let row_count = props.rows.len();
+    let visible = area.height.saturating_sub(3).max(1) as usize;
+    let max_off = row_count.saturating_sub(visible);
+
+    let selected = opts.selected_row.filter(|&r| r < row_count);
+    let offset = if let Some(sel) = selected {
+        let desired = sel.saturating_sub(visible.saturating_sub(1) / 2);
+        desired.min(max_off)
+    } else {
+        (opts.scroll as usize).min(max_off)
+    };
+
+    let mut state = TableState::default().with_offset(offset);
+    if let Some(sel) = selected {
+        state.select(Some(sel));
+    } else if opts.focused && row_count > 0 {
+        state.select(Some(offset.min(row_count - 1)));
+    }
+    frame.render_stateful_widget(table, area, &mut state);
+
+    if max_off > 0 {
+        let mut sb_state = ScrollbarState::new(row_count).position(offset);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓")),
+            area,
+            &mut sb_state,
+        );
+    }
 }
 
-fn render_list(frame: &mut Frame, area: ratatui::layout::Rect, chunk: &TuiChunk) {
+fn render_list(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    opts: &ChunkRenderOpts,
+) {
     let Ok(props) = serde_json::from_value::<ListProps>(chunk.props.clone()) else {
-        let p = Paragraph::new("invalid List props").block(titled_block(&chunk.widget_id, false));
+        let p =
+            Paragraph::new("invalid List props").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
-    let title = props
-        .title
-        .clone()
-        .unwrap_or_else(|| format!("• {}", chunk.widget_id));
-    let selected = props.selected_index.unwrap_or(0);
+    let title = title_mark(
+        opts,
+        props
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("• {}", chunk.widget_id)),
+    );
+
     let items: Vec<ListItem> = props
         .items
         .iter()
-        .enumerate()
-        .map(|(i, text)| {
-            let marker = if i == selected { "▸ " } else { "  " };
-            let style = if i == selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-            ListItem::new(Line::from(Span::styled(format!("{marker}{text}"), style)))
+        .map(|text| {
+            ListItem::new(Line::from(Span::styled(
+                format!("  {text}"),
+                Style::default().fg(Color::Gray),
+            )))
         })
         .collect();
 
-    let list = List::new(items).block(titled_block(title, false));
-    frame.render_widget(list, area);
+    let list = List::new(items)
+        .block(titled_block(title, border_tone(opts)))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
+
+    let n = props.items.len();
+    let visible = area.height.saturating_sub(2).max(1) as usize;
+    let max_off = n.saturating_sub(visible);
+    let offset = (opts.scroll as usize).min(max_off);
+    let selected = props
+        .selected_index
+        .unwrap_or(offset)
+        .clamp(offset, (offset + visible.saturating_sub(1)).min(n.saturating_sub(1)));
+    let mut state = ListState::default()
+        .with_offset(offset)
+        .with_selected(if n > 0 { Some(selected) } else { None });
+    frame.render_stateful_widget(list, area, &mut state);
+
+    if max_off > 0 {
+        let mut sb_state = ScrollbarState::new(n).position(offset);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("↑"))
+                .end_symbol(Some("↓")),
+            area,
+            &mut sb_state,
+        );
+    }
 }
 
-fn render_gauge(frame: &mut Frame, area: ratatui::layout::Rect, chunk: &TuiChunk) {
+fn render_gauge(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    opts: &ChunkRenderOpts,
+) {
     let Ok(props) = serde_json::from_value::<GaugeProps>(chunk.props.clone()) else {
-        let p = Paragraph::new("invalid Gauge props").block(titled_block(&chunk.widget_id, false));
+        let p =
+            Paragraph::new("invalid Gauge props").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
     let ratio = props.ratio.clamp(0.0, 1.0);
-    let title = props
-        .title
-        .clone()
-        .unwrap_or_else(|| chunk.widget_id.clone());
+    let title = title_mark(
+        opts,
+        props
+            .title
+            .clone()
+            .unwrap_or_else(|| chunk.widget_id.clone()),
+    );
     let label = props
         .label
         .clone()
@@ -194,27 +376,32 @@ fn render_gauge(frame: &mut Frame, area: ratatui::layout::Rect, chunk: &TuiChunk
     };
 
     let gauge = Gauge::default()
-        .block(titled_block(title, false))
+        .block(titled_block(title, border_tone(opts)))
         .gauge_style(Style::default().fg(color).bg(Color::Black))
         .ratio(ratio)
         .label(label);
     frame.render_widget(gauge, area);
 }
 
-fn render_chart(frame: &mut Frame, area: ratatui::layout::Rect, chunk: &TuiChunk) {
+fn render_chart(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    opts: &ChunkRenderOpts,
+) {
     let Ok(props) = serde_json::from_value::<ChartProps>(chunk.props.clone()) else {
-        let p = Paragraph::new("invalid Chart props").block(titled_block(&chunk.widget_id, false));
+        let p =
+            Paragraph::new("invalid Chart props").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
 
     if props.datasets.is_empty() {
-        let p = Paragraph::new("empty Chart").block(titled_block(&chunk.widget_id, false));
+        let p = Paragraph::new("empty Chart").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     }
 
-    // Own the point buffers for Dataset lifetimes within this draw.
     let owned: Vec<Vec<(f64, f64)>> = props
         .datasets
         .iter()
@@ -265,14 +452,17 @@ fn render_chart(frame: &mut Frame, area: ratatui::layout::Rect, chunk: &TuiChunk
         })
         .collect();
 
-    let title = props
-        .title
-        .clone()
-        .unwrap_or_else(|| format!("◈ {}", chunk.widget_id));
+    let title = title_mark(
+        opts,
+        props
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("◈ {}", chunk.widget_id)),
+    );
 
     let y_mid = (y_min + y_max) / 2.0;
     let chart = Chart::new(datasets)
-        .block(titled_block(title, false))
+        .block(titled_block(title, border_tone(opts)))
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::DarkGray))

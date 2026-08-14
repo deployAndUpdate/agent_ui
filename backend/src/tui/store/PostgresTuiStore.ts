@@ -87,6 +87,16 @@ export class PostgresTuiStore implements TuiStore {
     }
   }
 
+  async enqueueOutbox(sessionId: string, manifest: TuiManifest): Promise<TuiOutboxEvent> {
+    const res = await this.pool.query(
+      `INSERT INTO tui_outbox (session_id, payload, status)
+       VALUES ($1, $2::jsonb, 'pending')
+       RETURNING id, session_id, payload, status, created_at`,
+      [sessionId, JSON.stringify(manifest)],
+    );
+    return rowToOutbox(res.rows[0]);
+  }
+
   async getSession(sessionId: string): Promise<TuiSessionSnapshot | null> {
     const res = await this.pool.query(
       `SELECT session_id, task_id, last_manifest, updated_at FROM tui_sessions WHERE session_id = $1`,
