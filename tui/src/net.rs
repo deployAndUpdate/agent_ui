@@ -6,14 +6,19 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
+use crate::action::UserAction;
 use crate::model::{ServerEvent, TuiManifest, WsStatus};
 
-pub fn spawn_ws_client(url: String, tx: mpsc::UnboundedSender<ServerEvent>) {
+pub fn spawn_ws_client(
+    url: String,
+    tx: mpsc::UnboundedSender<ServerEvent>,
+    mut action_rx: mpsc::UnboundedReceiver<UserAction>,
+) {
     tokio::spawn(async move {
         let mut backoff_ms: u64 = 400;
         loop {
             let _ = tx.send(ServerEvent::Status(WsStatus::Connecting));
-            match run_session(&url, &tx).await {
+            match run_session(&url, &tx, &mut action_rx).await {
                 Ok(()) => {
                     let _ = tx.send(ServerEvent::Status(WsStatus::Reconnecting));
                     backoff_ms = 400;
@@ -32,6 +37,7 @@ pub fn spawn_ws_client(url: String, tx: mpsc::UnboundedSender<ServerEvent>) {
 async fn run_session(
     url: &str,
     tx: &mpsc::UnboundedSender<ServerEvent>,
+    action_rx: &mut mpsc::UnboundedReceiver<UserAction>,
 ) -> anyhow::Result<()> {
     let (ws, _) = connect_async(url)
         .await
@@ -39,19 +45,36 @@ async fn run_session(
     let (mut write, mut read) = ws.split();
     let _ = tx.send(ServerEvent::Status(WsStatus::Live));
 
-    while let Some(msg) = read.next().await {
-        let msg = msg.context("ws read")?;
-        match msg {
-            Message::Text(text) => {
-                if let Some(ev) = parse_server_text(&text) {
-                    let _ = tx.send(ev);
+    loop {
+        tokio::select! {
+            maybe_msg = read.next() => {
+                match maybe_msg {
+                    Some(Ok(msg)) => match msg {
+                        Message::Text(text) => {
+                            if let Some(ev) = parse_server_text(&text) {
+                                let _ = tx.send(ev);
+                            }
+                        }
+                        Message::Ping(p) => {
+                            write.send(Message::Pong(p)).await.ok();
+                        }
+                        Message::Close(_) => break,
+                        _ => {}
+                    },
+                    Some(Err(e)) => return Err(e.into()),
+                    None => break,
                 }
             }
-            Message::Ping(p) => {
-                write.send(Message::Pong(p)).await.ok();
+            maybe_action = action_rx.recv() => {
+                match maybe_action {
+                    Some(action) => {
+                        let text = serde_json::to_string(&action)
+                            .context("serialize USER_ACTION")?;
+                        write.send(Message::Text(text.into())).await?;
+                    }
+                    None => break,
+                }
             }
-            Message::Close(_) => break,
-            _ => {}
         }
     }
     Ok(())

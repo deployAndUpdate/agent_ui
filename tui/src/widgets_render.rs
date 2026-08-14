@@ -23,8 +23,14 @@ const SERIES_COLORS: [Color; 6] = [
 ];
 
 pub struct ChunkRenderOpts {
+    /// Idle Tab focus (cyan).
     pub focused: bool,
+    /// Browse / TableInteract yellow hover.
+    pub hovered: bool,
+    /// TableInteract active.
+    pub active: bool,
     pub scroll: u16,
+    pub selected_row: Option<usize>,
 }
 
 pub fn style_name_to_color(name: Option<&str>) -> Color {
@@ -40,26 +46,61 @@ pub fn style_name_to_color(name: Option<&str>) -> Color {
     }
 }
 
-fn titled_block(title: impl Into<String>, focused: bool) -> Block<'static> {
+#[derive(Clone, Copy)]
+enum BorderTone {
+    Dim,
+    Cyan,
+    Yellow,
+}
+
+fn border_tone(opts: &ChunkRenderOpts) -> BorderTone {
+    if opts.hovered || opts.active {
+        BorderTone::Yellow
+    } else if opts.focused {
+        BorderTone::Cyan
+    } else {
+        BorderTone::Dim
+    }
+}
+
+fn titled_block(title: impl Into<String>, tone: BorderTone) -> Block<'static> {
     let title = title.into();
-    let border = if focused {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let title_style = if focused {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
+    let (border, title_style) = match tone {
+        BorderTone::Yellow => (
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        BorderTone::Cyan => (
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        BorderTone::Dim => (
+            Style::default().fg(Color::DarkGray),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
     };
     Block::default()
         .borders(Borders::ALL)
         .border_style(border)
         .title(Span::styled(title, title_style))
+}
+
+fn title_mark(opts: &ChunkRenderOpts, base: String) -> String {
+    if opts.hovered || opts.active {
+        format!("▸ {base}")
+    } else if opts.focused {
+        format!("▸ {base}")
+    } else {
+        base
+    }
 }
 
 pub fn render_chunk(
@@ -76,7 +117,7 @@ pub fn render_chunk(
         "Chart" => render_chart(frame, area, chunk, opts),
         other => {
             let msg = format!("unknown type: {other}");
-            let p = Paragraph::new(msg).block(titled_block(&chunk.widget_id, opts.focused));
+            let p = Paragraph::new(msg).block(titled_block(&chunk.widget_id, border_tone(opts)));
             frame.render_widget(p, area);
         }
     }
@@ -96,16 +137,17 @@ fn render_paragraph(
         },
     );
     let color = style_name_to_color(props.style.as_deref());
-    let title = props
-        .title
-        .clone()
-        .unwrap_or_else(|| chunk.widget_id.clone());
-    let title = if opts.focused {
-        format!("▸ {title}")
-    } else {
-        title
-    };
-    let block = titled_block(title, opts.focused).border_style(Style::default().fg(color));
+    let title = title_mark(
+        opts,
+        props
+            .title
+            .clone()
+            .unwrap_or_else(|| chunk.widget_id.clone()),
+    );
+    let mut block = titled_block(title, border_tone(opts));
+    if matches!(border_tone(opts), BorderTone::Dim) {
+        block = block.border_style(Style::default().fg(color));
+    }
 
     let inner_w = area.width.saturating_sub(2).max(1);
     let inner_h = area.height.saturating_sub(2).max(1);
@@ -141,7 +183,6 @@ fn col_constraints(headers: &[String], rows: &[Vec<String>], total_width: u16) -
     maxes
         .iter()
         .map(|&m| {
-            // Prefer content width but share remaining space via Fill-like ratio.
             let share = ((u32::from(m) * u32::from(usable)) / u32::from(sum)) as u16;
             let w = share.max(m.min(usable / n).max(3)).min(usable);
             Constraint::Length(w)
@@ -156,16 +197,13 @@ fn render_table(
     opts: &ChunkRenderOpts,
 ) {
     let Ok(props) = serde_json::from_value::<TableProps>(chunk.props.clone()) else {
-        let p = Paragraph::new("invalid Table props").block(titled_block(&chunk.widget_id, opts.focused));
+        let p =
+            Paragraph::new("invalid Table props").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
 
-    let title = if opts.focused {
-        format!("▸ ▤ {}", chunk.widget_id)
-    } else {
-        format!("▤ {}", chunk.widget_id)
-    };
+    let title = title_mark(opts, format!("▤ {}", chunk.widget_id));
 
     let header = Row::new(props.headers.iter().map(|h| {
         Cell::from(Span::styled(
@@ -193,18 +231,36 @@ fn render_table(
         .collect();
 
     let widths = col_constraints(&props.headers, &props.rows, area.width);
+    let highlight = if opts.active {
+        Style::default()
+            .bg(Color::Yellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().bg(Color::DarkGray).fg(Color::Cyan)
+    };
     let table = Table::new(rows, widths)
         .header(header)
-        .block(titled_block(title, opts.focused))
+        .block(titled_block(title, border_tone(opts)))
         .column_spacing(1)
-        .row_highlight_style(Style::default().bg(Color::DarkGray).fg(Color::Cyan));
+        .row_highlight_style(highlight);
 
     let row_count = props.rows.len();
-    let visible = area.height.saturating_sub(3).max(1) as usize; // borders + header
+    let visible = area.height.saturating_sub(3).max(1) as usize;
     let max_off = row_count.saturating_sub(visible);
-    let offset = (opts.scroll as usize).min(max_off);
+
+    let selected = opts.selected_row.filter(|&r| r < row_count);
+    let offset = if let Some(sel) = selected {
+        let desired = sel.saturating_sub(visible.saturating_sub(1) / 2);
+        desired.min(max_off)
+    } else {
+        (opts.scroll as usize).min(max_off)
+    };
+
     let mut state = TableState::default().with_offset(offset);
-    if opts.focused && row_count > 0 {
+    if let Some(sel) = selected {
+        state.select(Some(sel));
+    } else if opts.focused && row_count > 0 {
         state.select(Some(offset.min(row_count - 1)));
     }
     frame.render_stateful_widget(table, area, &mut state);
@@ -228,19 +284,18 @@ fn render_list(
     opts: &ChunkRenderOpts,
 ) {
     let Ok(props) = serde_json::from_value::<ListProps>(chunk.props.clone()) else {
-        let p = Paragraph::new("invalid List props").block(titled_block(&chunk.widget_id, opts.focused));
+        let p =
+            Paragraph::new("invalid List props").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
-    let title = props
-        .title
-        .clone()
-        .unwrap_or_else(|| format!("• {}", chunk.widget_id));
-    let title = if opts.focused {
-        format!("▸ {title}")
-    } else {
-        title
-    };
+    let title = title_mark(
+        opts,
+        props
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("• {}", chunk.widget_id)),
+    );
 
     let items: Vec<ListItem> = props
         .items
@@ -254,7 +309,7 @@ fn render_list(
         .collect();
 
     let list = List::new(items)
-        .block(titled_block(title, opts.focused))
+        .block(titled_block(title, border_tone(opts)))
         .highlight_style(
             Style::default()
                 .fg(Color::Cyan)
@@ -294,15 +349,19 @@ fn render_gauge(
     opts: &ChunkRenderOpts,
 ) {
     let Ok(props) = serde_json::from_value::<GaugeProps>(chunk.props.clone()) else {
-        let p = Paragraph::new("invalid Gauge props").block(titled_block(&chunk.widget_id, opts.focused));
+        let p =
+            Paragraph::new("invalid Gauge props").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
     let ratio = props.ratio.clamp(0.0, 1.0);
-    let title = props
-        .title
-        .clone()
-        .unwrap_or_else(|| chunk.widget_id.clone());
+    let title = title_mark(
+        opts,
+        props
+            .title
+            .clone()
+            .unwrap_or_else(|| chunk.widget_id.clone()),
+    );
     let label = props
         .label
         .clone()
@@ -317,7 +376,7 @@ fn render_gauge(
     };
 
     let gauge = Gauge::default()
-        .block(titled_block(title, opts.focused))
+        .block(titled_block(title, border_tone(opts)))
         .gauge_style(Style::default().fg(color).bg(Color::Black))
         .ratio(ratio)
         .label(label);
@@ -331,13 +390,14 @@ fn render_chart(
     opts: &ChunkRenderOpts,
 ) {
     let Ok(props) = serde_json::from_value::<ChartProps>(chunk.props.clone()) else {
-        let p = Paragraph::new("invalid Chart props").block(titled_block(&chunk.widget_id, opts.focused));
+        let p =
+            Paragraph::new("invalid Chart props").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
 
     if props.datasets.is_empty() {
-        let p = Paragraph::new("empty Chart").block(titled_block(&chunk.widget_id, opts.focused));
+        let p = Paragraph::new("empty Chart").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     }
@@ -392,14 +452,17 @@ fn render_chart(
         })
         .collect();
 
-    let title = props
-        .title
-        .clone()
-        .unwrap_or_else(|| format!("◈ {}", chunk.widget_id));
+    let title = title_mark(
+        opts,
+        props
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("◈ {}", chunk.widget_id)),
+    );
 
     let y_mid = (y_min + y_max) / 2.0;
     let chart = Chart::new(datasets)
-        .block(titled_block(title, opts.focused))
+        .block(titled_block(title, border_tone(opts)))
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::DarkGray))

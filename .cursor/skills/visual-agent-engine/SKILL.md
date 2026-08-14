@@ -126,6 +126,13 @@ WS or `POST /api/v1/tui/action`:
 
 When reacting: push a new `SYNC_DASHBOARD` / delta with updated chunks.
 
+Builtin reactor (`TUI_ACTION_REACTOR=builtin`, default):
+
+- `select_row` → detail screen (Paragraph fields from table headers/row)
+- `navigate_back` → restore previous board
+
+Set `TUI_ACTION_REACTOR=off` to only record actions (external agent reacts).
+
 ## Do / Don't
 
 | Do | Don't |

@@ -1,4 +1,4 @@
-import type { TuiUserAction } from '@visual-engine/tui-shared';
+import type { TuiManifest, TuiUserAction } from '@visual-engine/tui-shared';
 import type {
   TuiOutboxEvent,
   TuiSaveInput,
@@ -32,22 +32,27 @@ export class InMemoryTuiStore implements TuiStore {
       manifest,
       updatedAt,
     };
-    const outboxEvent: TuiOutboxEvent = {
-      id: `tui_ob_${++this.seq}`,
-      sessionId,
-      payload: manifest,
-      status: 'pending',
-      createdAt: updatedAt,
-    };
+    const outboxEvent = await this.enqueueOutbox(sessionId, manifest);
 
     this.sessions.set(sessionId, snapshot);
-    this.outbox.push(outboxEvent);
 
     const result: TuiSaveResult & { ok: true } = { ok: true, snapshot, outboxEvent };
     if (idempotencyKey) {
       this.idempotency.set(`${sessionId}:${idempotencyKey}`, result);
     }
     return result;
+  }
+
+  async enqueueOutbox(sessionId: string, manifest: TuiManifest): Promise<TuiOutboxEvent> {
+    const outboxEvent: TuiOutboxEvent = {
+      id: `tui_ob_${++this.seq}`,
+      sessionId,
+      payload: manifest,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    this.outbox.push(outboxEvent);
+    return outboxEvent;
   }
 
   async getSession(sessionId: string): Promise<TuiSessionSnapshot | null> {
