@@ -4,6 +4,7 @@ import type { TuiStore } from '../store/types.js';
 import type { Logger } from '../../logging/logger.js';
 import { createLogger } from '../../logging/logger.js';
 import { assertSessionId } from '../sessionId.js';
+import { reactToUserAction } from '../actions/reactToUserAction.js';
 import { TuiSessionHub } from './TuiSessionHub.js';
 
 export const TUI_WS_PATH = '/api/v1/tui/stream';
@@ -45,6 +46,12 @@ export function attachTuiWebSocket(
         { sessionId, taskId: action.taskId, widgetId: action.widgetId, action: action.action },
         'tui USER_ACTION',
       );
+      await reactToUserAction({
+        sessionId,
+        action,
+        store,
+        logger: log,
+      });
     });
   });
 

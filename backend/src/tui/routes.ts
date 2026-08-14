@@ -4,6 +4,7 @@ import type { TuiStore } from './store/types.js';
 import type { Logger } from '../logging/logger.js';
 import { createLogger } from '../logging/logger.js';
 import { assertSessionId, sessionIdError } from './sessionId.js';
+import { reactToUserAction, rememberBoard } from './actions/reactToUserAction.js';
 
 export interface TuiRouterDeps {
   store: TuiStore;
@@ -55,6 +56,8 @@ export function createTuiRouter(deps: TuiRouterDeps): Router {
       res.status(400).json({ errors: [result.reason] });
       return;
     }
+
+    rememberBoard(sessionId, validation.data);
 
     log.info(
       {
@@ -113,7 +116,15 @@ export function createTuiRouter(deps: TuiRouterDeps): Router {
       },
       'tui USER_ACTION (http)',
     );
-    res.status(202).json({ ok: true });
+
+    const { reacted } = await reactToUserAction({
+      sessionId,
+      action: actionBody,
+      store: deps.store,
+      logger: log,
+    });
+
+    res.status(202).json({ ok: true, reacted });
   });
 
   return router;

@@ -75,7 +75,9 @@ describe('TUI API (integration)', () => {
     expect(res.body.taskId).toBe('task_7749');
   });
 
-  it('POST /api/v1/tui/action persists USER_ACTION', async () => {
+  it('POST /api/v1/tui/action persists USER_ACTION and reacts with detail', async () => {
+    await tuiStore.saveSessionWithOutbox({ sessionId: 'tui_sess', manifest });
+
     const res = await request(app)
       .post('/api/v1/tui/action')
       .send({
@@ -84,10 +86,14 @@ describe('TUI API (integration)', () => {
         taskId: 'task_7749',
         widgetId: 'w_results',
         action: 'select_row',
-        payload: { rowIndex: 0, rowData: ['src/main.rs', '142', '0.98'] },
+        payload: { rowIndex: 0, row: ['src/main.rs', '142', '0.98'] },
       });
     expect(res.status).toBe(202);
+    expect(res.body.reacted).toBe(true);
     expect(tuiStore.listActions('tui_sess')).toHaveLength(1);
+
+    const snap = await tuiStore.getSession('tui_sess');
+    expect(snap?.manifest.taskId).toMatch(/^detail_w_results_/);
   });
 });
 
