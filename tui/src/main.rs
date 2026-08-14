@@ -1,4 +1,5 @@
 mod app;
+mod content_measure;
 mod layout_chunks;
 mod model;
 mod net;

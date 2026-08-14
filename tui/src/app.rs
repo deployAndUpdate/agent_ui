@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -50,7 +50,7 @@ impl App {
         terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     ) -> Result<()> {
         let mut events = EventStream::new();
-        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        let mut tick = tokio::time::interval(Duration::from_millis(80));
 
         loop {
             terminal.draw(|f| draw(f, &self.state))?;
@@ -62,16 +62,34 @@ impl App {
                         Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
                             match key.code {
                                 KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                                KeyCode::Tab => self.state.focus_next(),
+                                KeyCode::BackTab => self.state.focus_prev(),
+                                KeyCode::Char('j') | KeyCode::Down => self.state.scroll_focused(1),
+                                KeyCode::Char('k') | KeyCode::Up => self.state.scroll_focused(-1),
                                 KeyCode::PageDown => {
-                                    self.state.scroll = self.state.scroll.saturating_add(1);
+                                    let step = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                        1
+                                    } else {
+                                        5
+                                    };
+                                    self.state.page_scroll = self.state.page_scroll.saturating_add(step);
                                 }
                                 KeyCode::PageUp => {
-                                    self.state.scroll = self.state.scroll.saturating_sub(1);
+                                    let step = if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                        1
+                                    } else {
+                                        5
+                                    };
+                                    self.state.page_scroll = self.state.page_scroll.saturating_sub(step);
                                 }
+                                KeyCode::Char('[') => self.state.focus_prev(),
+                                KeyCode::Char(']') => self.state.focus_next(),
                                 _ => {}
                             }
                         }
-                        Some(Ok(Event::Resize(_, _))) => {}
+                        Some(Ok(Event::Resize(_, _))) => {
+                            // Next draw uses new frame.area(); heights recompute from width.
+                        }
                         Some(Err(e)) => {
                             self.state.status = WsStatus::Error(e.to_string());
                         }
@@ -82,7 +100,7 @@ impl App {
                 maybe_msg = self.ws_rx.recv() => {
                     match maybe_msg {
                         Some(ServerEvent::RenderManifest(m)) => {
-                            self.state.manifest = Some(m);
+                            self.state.set_manifest(m);
                             self.state.status = WsStatus::Live;
                         }
                         Some(ServerEvent::Status(s)) => {

@@ -1,19 +1,26 @@
+use std::collections::HashMap;
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
+use crate::content_measure::allocated_height;
 use crate::layout_chunks::constraints_from_chunks;
 use crate::model::{TuiChunk, TuiManifest, WsStatus};
-use crate::widgets_render::render_chunk;
+use crate::widgets_render::{render_chunk, ChunkRenderOpts};
 
 pub struct UiState {
     pub session_id: String,
     pub status: WsStatus,
     pub manifest: Option<TuiManifest>,
-    /// Vertical scroll offset in terminal rows (PgUp/PgDown).
-    pub scroll: u16,
+    /// Page (board) vertical scroll in rows.
+    pub page_scroll: u16,
+    /// Focus index into scrollable chunk indices (not raw chunk index).
+    pub focus: usize,
+    /// Per-widget vertical scroll offset.
+    pub widget_scroll: HashMap<String, u16>,
 }
 
 impl UiState {
@@ -22,21 +29,76 @@ impl UiState {
             session_id,
             status: WsStatus::Connecting,
             manifest: None,
-            scroll: 0,
+            page_scroll: 0,
+            focus: 0,
+            widget_scroll: HashMap::new(),
         }
     }
-}
 
-/// Prefer readable min heights over Ratio squeeze (visual-first).
-pub fn chunk_height(chunk: &TuiChunk) -> u16 {
-    let s = chunk.size.max(1);
-    match chunk.widget_type.as_str() {
-        "Gauge" => 3,
-        "Paragraph" => s.clamp(3, 8),
-        "List" => s.clamp(4, 12),
-        "Table" => s.clamp(6, 18),
-        "Chart" => s.clamp(10, 22),
-        _ => s.clamp(3, 10),
+    pub fn set_manifest(&mut self, manifest: TuiManifest) {
+        self.manifest = Some(manifest);
+        self.page_scroll = 0;
+        self.focus = 0;
+        self.widget_scroll.clear();
+    }
+
+    /// Chunk indices that support in-widget scroll.
+    pub fn scrollable_indices(&self) -> Vec<usize> {
+        let Some(m) = &self.manifest else {
+            return vec![];
+        };
+        m.layout
+            .chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| matches!(c.widget_type.as_str(), "Paragraph" | "Table" | "List"))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    pub fn focused_chunk_index(&self) -> Option<usize> {
+        let ids = self.scrollable_indices();
+        if ids.is_empty() {
+            return None;
+        }
+        Some(ids[self.focus % ids.len()])
+    }
+
+    pub fn focus_next(&mut self) {
+        let n = self.scrollable_indices().len();
+        if n == 0 {
+            return;
+        }
+        self.focus = (self.focus + 1) % n;
+    }
+
+    pub fn focus_prev(&mut self) {
+        let n = self.scrollable_indices().len();
+        if n == 0 {
+            return;
+        }
+        self.focus = (self.focus + n - 1) % n;
+    }
+
+    pub fn scroll_focused(&mut self, delta: i32) {
+        let Some(idx) = self.focused_chunk_index() else {
+            return;
+        };
+        let id = self
+            .manifest
+            .as_ref()
+            .and_then(|m| m.layout.chunks.get(idx))
+            .map(|c| c.widget_id.clone());
+        let Some(id) = id else {
+            return;
+        };
+        let cur = *self.widget_scroll.get(&id).unwrap_or(&0);
+        let next = if delta < 0 {
+            cur.saturating_sub((-delta) as u16)
+        } else {
+            cur.saturating_add(delta as u16)
+        };
+        self.widget_scroll.insert(id, next);
     }
 }
 
@@ -88,52 +150,89 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &UiState) {
     }
 
     if manifest.layout.direction == "horizontal" {
-        draw_horizontal(frame, area, &manifest.layout.chunks);
+        draw_horizontal(frame, area, &manifest.layout.chunks, state);
     } else {
-        draw_vertical_scroll(frame, area, &manifest.layout.chunks, state.scroll);
+        draw_vertical_scroll(frame, area, &manifest.layout.chunks, state);
     }
 }
 
-fn draw_horizontal(frame: &mut Frame, area: Rect, chunks: &[TuiChunk]) {
+fn draw_horizontal(frame: &mut Frame, area: Rect, chunks: &[TuiChunk], state: &UiState) {
     let constraints = constraints_from_chunks(chunks);
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(constraints)
         .split(area);
+    let focused = state.focused_chunk_index();
     for (i, chunk) in chunks.iter().enumerate() {
         if let Some(rect) = layout.get(i) {
-            render_chunk(frame, *rect, chunk);
+            let scroll = *state.widget_scroll.get(&chunk.widget_id).unwrap_or(&0);
+            render_chunk(
+                frame,
+                *rect,
+                chunk,
+                &ChunkRenderOpts {
+                    focused: focused == Some(i),
+                    scroll,
+                },
+            );
         }
     }
 }
 
-fn draw_vertical_scroll(frame: &mut Frame, area: Rect, chunks: &[TuiChunk], scroll: u16) {
-    let heights: Vec<u16> = chunks.iter().map(chunk_height).collect();
+fn draw_vertical_scroll(frame: &mut Frame, area: Rect, chunks: &[TuiChunk], state: &UiState) {
+    let heights: Vec<u16> = chunks
+        .iter()
+        .map(|c| allocated_height(c, area.width, area.height))
+        .collect();
     let total_h: u16 = heights.iter().sum();
     let max_scroll = total_h.saturating_sub(area.height);
-    let scroll = scroll.min(max_scroll);
+    let page_scroll = state.page_scroll.min(max_scroll);
+    let focused = state.focused_chunk_index();
 
-    let mut y_cursor: i32 = area.y as i32 - scroll as i32;
-    for (chunk, h) in chunks.iter().zip(heights.iter()) {
+    let mut y_cursor: i32 = area.y as i32 - i32::from(page_scroll);
+    for (i, (chunk, h)) in chunks.iter().zip(heights.iter()).enumerate() {
         let top = y_cursor;
         let bottom = y_cursor + i32::from(*h);
         y_cursor = bottom;
 
-        let visible_top = top.max(area.y as i32);
-        let visible_bottom = bottom.min((area.y + area.height) as i32);
+        let visible_top = top.max(i32::from(area.y));
+        let visible_bottom = bottom.min(i32::from(area.y.saturating_add(area.height)));
         if visible_bottom <= visible_top {
             continue;
         }
-        let rect = Rect {
-            x: area.x,
-            y: visible_top as u16,
-            width: area.width,
-            height: (visible_bottom - visible_top) as u16,
+
+        // Prefer drawing at full allocated height when mostly visible to avoid clip squeeze.
+        let show_full = top >= i32::from(area.y) && bottom <= i32::from(area.y + area.height);
+        let rect = if show_full {
+            Rect {
+                x: area.x,
+                y: top as u16,
+                width: area.width,
+                height: *h,
+            }
+        } else {
+            Rect {
+                x: area.x,
+                y: visible_top as u16,
+                width: area.width,
+                height: (visible_bottom - visible_top) as u16,
+            }
         };
-        // Only draw full widget if enough of the slot is visible (avoid tiny scraps).
-        if rect.height >= 2 {
-            render_chunk(frame, rect, chunk);
+
+        if rect.height < 2 {
+            continue;
         }
+
+        let scroll = *state.widget_scroll.get(&chunk.widget_id).unwrap_or(&0);
+        render_chunk(
+            frame,
+            rect,
+            chunk,
+            &ChunkRenderOpts {
+                focused: focused == Some(i),
+                scroll,
+            },
+        );
     }
 }
 
@@ -148,6 +247,11 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &UiState) {
         .as_ref()
         .map(|m| m.layout.chunks.len())
         .unwrap_or(0);
+    let focus_id = state
+        .focused_chunk_index()
+        .and_then(|i| state.manifest.as_ref()?.layout.chunks.get(i))
+        .map(|c| c.widget_id.as_str())
+        .unwrap_or("-");
     let status_color = match &state.status {
         WsStatus::Live => Color::Green,
         WsStatus::Connecting | WsStatus::Reconnecting => Color::Yellow,
@@ -168,7 +272,12 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &UiState) {
         Span::styled(format!("chunks={n}"), Style::default().fg(Color::Gray)),
         Span::raw(" · "),
         Span::styled(
-            "PgUp/PgDn scroll · q quit",
+            format!("focus={focus_id}"),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw(" · "),
+        Span::styled(
+            "Tab focus · ↑↓ widget · PgUp/Dn page · q",
             Style::default().fg(Color::DarkGray),
         ),
     ]);
