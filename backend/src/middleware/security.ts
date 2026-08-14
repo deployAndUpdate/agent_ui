@@ -8,8 +8,8 @@ export function createAuthMiddleware(config: AppConfig, log: Logger) {
       next();
       return;
     }
-    // health is open
-    if (req.path === '/health') {
+    // liveness / readiness are open
+    if (req.path === '/health' || req.path === '/ready') {
       next();
       return;
     }

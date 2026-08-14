@@ -1,101 +1,79 @@
 # Visual Agent Engine
 
-Server-Driven UI: агент → JSON Manifest → AJV Gatekeeper → Transactional Outbox → WebSocket → клиенты (React web | TUI stub).
+Server-Driven **TUI**: agent → JSON `TuiManifest` → AJV → outbox → WebSocket → **Ratatui**.
 
-Два **параллельных** трека: веб (`/api/manifest`, `/ws`) и TUI (`/api/v1/tui/*`, `/api/v1/tui/stream`). Общей бизнес-логики между ними нет — веб можно выпилить без правок TUI-ядра.
+This is an orchestrator plus a terminal browser. There is no LLM inside.
 
-## Документация
+[![CI](https://img.shields.io/badge/CI-github%20actions-blue)](.github/workflows/ci.yml)
 
-- [Техническая спецификация](docs/TECHNICAL_SPEC.md)
-- [Декомпозиция](docs/DECOMPOSITION.md)
-- [Пирамида тестирования](docs/TESTING_PYRAMID.md)
-- [Roadmap 1–13](docs/ROADMAP_1_13.md)
-- [Цели](docs/goals/)
-- [TUI / Ratatui track](docs/goals/07-tui-ratatui.md)
+## Requirements
 
-## Быстрый старт (локально, in-memory)
+- Node.js ≥ 20
+- Rust stable (`cargo`)
+- UTF-8 terminal, recommended ≥ 80×24
+- Linux / macOS / WSL2
 
-```bash
-npm install
-npm test
-
-./app-run front      # backend + web UI  → http://localhost:5173/?sessionId=demo
-./app-run stop
-```
-
-Или по отдельности:
+## Quick start (utility)
 
 ```bash
-# терминал 1
-npm run dev:backend
-
-# терминал 2 — веб
-npm run dev:frontend
-# http://localhost:5173/?sessionId=demo
-
-# терминал 2 — TUI (Ratatui)
-npm run dev:tui
-# TUI_WS_URL=ws://127.0.0.1:3001/api/v1/tui/stream?sessionId=demo
+git clone <repo> && cd visual_engine
+./install
+./vae --demo
 ```
 
-### Веб-манифест
+Stop the backend with `./vae stop`.
+
+Push a manifest:
 
 ```bash
-curl -s http://127.0.0.1:3001/api/manifest -H 'content-type: application/json' -d '{
-  "sessionId":"demo","version":1,
-  "manifest":{
-    "taskId":"t1","operation":"SYNC_DASHBOARD",
-    "layout":{"widgets":[{
-      "widgetId":"w_01","type":"MetricCard",
-      "size":{"w":4,"h":2},
-      "props":{"title":"Users","value":42}
-    }]}
-  }
-}'
+npm run agent -- submit --session demo --file examples/hello.tui.json
+# aliases: visual-agent / vae-agent (after npm link -w @visual-engine/cli)
 ```
 
-### TUI-манифест
+Smoke without TUI:
 
 ```bash
-curl -s http://127.0.0.1:3001/api/v1/tui/manifest -H 'content-type: application/json' -d '{
-  "sessionId":"demo",
-  "manifest":{
-    "taskId":"task_7749","operation":"SYNC_DASHBOARD",
-    "layout":{"direction":"vertical","chunks":[{
-      "widgetId":"w_header","type":"Paragraph","size":3,
-      "props":{"title":"Hello","text":"TUI track","style":"cyan"}
-    }]}
-  }
-}'
+./vae smoke
 ```
 
-CLI Self-Healing агент (веб-трек):
+## Docker (backend)
 
 ```bash
-npm run agent -- submit --session demo --version 2 --file backend/tests/fixtures/manifest.invalid.json
+# in-memory
+API_KEYS=dev-key docker compose up --build backend
+
+# Postgres
+API_KEYS=secret docker compose --profile with-db up --build
 ```
 
-## Docker (Postgres)
+Always run the TUI on the host (needs a TTY):
 
 ```bash
-API_KEYS=dev-key docker compose up --build
-# UI: http://localhost:8080/?sessionId=demo&apiKey=dev-key
-# API: http://localhost:3001
+TUI_SESSION_ID=demo npm run dev:tui
+# or: cargo install --path tui   → vae-tui
 ```
 
-## Агент (Cursor Skill)
+## Env
 
-В репозитории: `.cursor/skills/visual-agent-engine/`.
+See [`.env.example`](.env.example). With `NODE_ENV=production`, `API_KEYS` is required (or set `AUTH_ENABLED=false` explicitly).
 
-Агент сам подхватит skill при запросах про дашборд / виджеты / SDUI. Явно: «используй skill visual-agent-engine».
+## Docs
 
-## Пакеты
+- [Technical spec](docs/TECHNICAL_SPEC.md)
+- [Prod checklist](docs/PROD.md)
+- Skill: `.cursor/skills/visual-agent-engine/`
 
-| Пакет | Назначение |
-|-------|------------|
-| `@visual-engine/shared` | Web schema, Scene Graph, RendererPort, AJV |
-| `@visual-engine/tui-shared` | TUI schema (Paragraph/Table/…), AJV |
-| `@visual-engine/cli` | CLI submit + Self-Healing (веб) |
-| `backend` | Web + TUI API, Outbox, WS, Postgres/memory |
-| `frontend` | React adapter (Scene → DOM) |
-| `tui/` | Ratatui TUI browser (Paragraph/Table/List/Gauge/Chart) |
+Local/scratch notes (may be non-English) live under `docs/dev/` and are **not** committed.
+
+## Packages
+
+| Path | Role |
+|------|------|
+| `packages/tui-shared` | JSON Schema + AJV |
+| `packages/cli` | `visual-agent` / `vae-agent` submit |
+| `backend` | HTTP + WS + outbox |
+| `tui/` | Ratatui client (`vae-tui`) |
+
+## License
+
+MIT — see [LICENSE](LICENSE).

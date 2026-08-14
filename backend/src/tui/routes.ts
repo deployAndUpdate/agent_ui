@@ -3,6 +3,7 @@ import { validateTuiManifest, type TuiUserAction } from '@visual-engine/tui-shar
 import type { TuiStore } from './store/types.js';
 import type { Logger } from '../logging/logger.js';
 import { createLogger } from '../logging/logger.js';
+import { assertSessionId, sessionIdError } from './sessionId.js';
 
 export interface TuiRouterDeps {
   store: TuiStore;
@@ -32,8 +33,8 @@ export function createTuiRouter(deps: TuiRouterDeps): Router {
       (typeof req.header('idempotency-key') === 'string' && req.header('idempotency-key')) ||
       (typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey : undefined);
 
-    if (typeof sessionId !== 'string' || sessionId.length === 0) {
-      res.status(400).json({ errors: ['sessionId is required'] });
+    if (!assertSessionId(sessionId)) {
+      res.status(400).json({ errors: [sessionIdError(sessionId)] });
       return;
     }
 
@@ -61,6 +62,7 @@ export function createTuiRouter(deps: TuiRouterDeps): Router {
         taskId: result.snapshot.taskId,
         outboxEventId: result.outboxEvent.id,
         idempotentReplay: Boolean(result.idempotentReplay),
+        chunks: result.snapshot.manifest.layout.chunks.length,
       },
       'tui manifest accepted',
     );
@@ -75,6 +77,10 @@ export function createTuiRouter(deps: TuiRouterDeps): Router {
   });
 
   router.get('/session/:sessionId', async (req: Request, res: Response) => {
+    if (!assertSessionId(req.params.sessionId)) {
+      res.status(400).json({ errors: [sessionIdError(req.params.sessionId)] });
+      return;
+    }
     const snap = await deps.store.getSession(req.params.sessionId);
     if (!snap) {
       res.status(404).json({ error: 'not_found' });
@@ -88,8 +94,8 @@ export function createTuiRouter(deps: TuiRouterDeps): Router {
       typeof req.body?.sessionId === 'string' ? req.body.sessionId : undefined;
     const actionBody = req.body?.event === 'USER_ACTION' ? req.body : req.body?.action;
 
-    if (!sessionId) {
-      res.status(400).json({ errors: ['sessionId is required'] });
+    if (!assertSessionId(sessionId)) {
+      res.status(400).json({ errors: [sessionIdError(sessionId)] });
       return;
     }
     if (!isUserAction(actionBody)) {

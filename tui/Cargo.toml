@@ -5,7 +5,7 @@ edition = "2021"
 description = "Ratatui TUI browser for Visual Agent Engine (max visual, minimal interactivity)"
 
 [[bin]]
-name = "tui"
+name = "vae-tui"
 path = "src/main.rs"
 
 [dependencies]

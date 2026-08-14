@@ -12,4 +12,5 @@ playwright/.cache/
 .vae/
 .app-run/
 tui/target/
+docs/dev/
 

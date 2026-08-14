@@ -5,9 +5,7 @@ import WebSocket from 'ws';
 import request from 'supertest';
 import type { TuiManifest } from '@visual-engine/tui-shared';
 import { createApp } from '../../src/app.js';
-import { InMemoryDashboardStore } from '../../src/store/InMemoryDashboardStore.js';
 import { InMemoryTuiStore } from '../../src/tui/store/InMemoryTuiStore.js';
-import { attachWebSocketServer } from '../../src/ws/attachWebSocketServer.js';
 import { attachTuiWebSocket } from '../../src/tui/ws/attachTuiWebSocket.js';
 import { TuiOutboxPublisher } from '../../src/tui/outbox/TuiOutboxPublisher.js';
 import validTui from '../fixtures/tui-manifest.valid.json';
@@ -30,7 +28,7 @@ describe('TUI API (integration)', () => {
 
   beforeEach(() => {
     tuiStore = new InMemoryTuiStore();
-    app = createApp({ store: new InMemoryDashboardStore(), tuiStore });
+    app = createApp({ tuiStore });
   });
 
   it('POST /api/v1/tui/manifest accepts valid payload and enqueues outbox', async () => {
@@ -95,18 +93,14 @@ describe('TUI API (integration)', () => {
 
 describe('TUI WebSocket outbox stream', () => {
   let tuiStore: InMemoryTuiStore;
-  let dashboardStore: InMemoryDashboardStore;
   let server: http.Server;
   let publisher: TuiOutboxPublisher;
   let port: number;
 
   beforeEach(async () => {
     tuiStore = new InMemoryTuiStore();
-    dashboardStore = new InMemoryDashboardStore();
-    const app = createApp({ store: dashboardStore, tuiStore });
+    const app = createApp({ tuiStore });
     server = http.createServer(app);
-    // Both tracks on one HTTP server (regression: dual WSS path conflict → 400).
-    attachWebSocketServer(server, dashboardStore);
     const hub = attachTuiWebSocket(server, tuiStore);
     publisher = new TuiOutboxPublisher(tuiStore, hub);
     publisher.start(20);

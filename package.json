@@ -1,27 +1,29 @@
 {
   "name": "visual-engine",
+  "version": "0.2.0",
   "private": true,
+  "description": "Server-Driven TUI: agent JSON → AJV → outbox → Ratatui",
   "workspaces": [
     "packages/*",
-    "backend",
-    "frontend"
+    "backend"
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
-    "test:shared": "npm test -w @visual-engine/shared",
     "test:tui-shared": "npm test -w @visual-engine/tui-shared",
     "test:backend": "npm test -w backend",
-    "test:frontend": "npm test -w frontend",
     "test:cli": "npm test -w @visual-engine/cli",
-    "test:e2e": "npm run test:e2e -w frontend",
+    "test:tui": "cargo test --manifest-path tui/Cargo.toml",
     "dev:backend": "npm run dev -w backend",
-    "dev:frontend": "npm run dev -w frontend",
-    "dev:tui": "cargo run --manifest-path tui/Cargo.toml",
-    "dev:tui-stub": "cargo run --manifest-path tui/Cargo.toml",
-    "app:front": "bash ./app-run front",
-    "app:stop": "bash ./app-run stop",
+    "start:backend": "npm run start -w backend",
+    "dev:tui": "cargo run --release --manifest-path tui/Cargo.toml",
+    "dev:tui-stub": "cargo run --release --manifest-path tui/Cargo.toml",
+    "build:tui": "cargo build --release --manifest-path tui/Cargo.toml",
+    "app:tui": "bash ./vae --no-tui",
+    "app:stop": "bash ./vae stop",
+    "start": "bash ./vae",
+    "smoke": "bash ./vae smoke",
     "agent": "npm run start -w @visual-engine/cli --",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present && npm run build:tui"
   },
   "engines": {
     "node": ">=20"
