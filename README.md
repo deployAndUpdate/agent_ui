@@ -76,7 +76,8 @@ Local/scratch notes (may be non-English) live under `docs/dev/` and are **not** 
 
 ## Examples
 Agent terminal with prompt (Cursor AI example) :
-<img width="862" height="516" alt="image" src="https://github.com/user-attachments/assets/536f606c-87f4-454e-8d91-cdb15fac411f" />
+<img width="1872" height="602" alt="image" src="https://github.com/user-attachments/assets/7316a68c-2b56-441a-bcf0-be62e5356bde" />
+
 Visual engine terminal :
 <img width="1920" height="1200" alt="image" src="https://github.com/user-attachments/assets/75c2d4ef-8fed-479a-9564-48014feccacf" />
 
