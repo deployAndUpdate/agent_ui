@@ -1,75 +1,84 @@
-import type { DashboardManifest, ManifestOperation, WidgetType } from '@visual-engine/shared';
+import type { TuiManifest, TuiManifestOperation, TuiWidgetType } from '@visual-engine/tui-shared';
 
-const OPERATIONS: ManifestOperation[] = [
+const OPS: TuiManifestOperation[] = [
   'SYNC_DASHBOARD',
   'ADD_WIDGET',
   'UPDATE_WIDGET',
   'REMOVE_WIDGET',
 ];
+const TYPES: TuiWidgetType[] = ['Paragraph', 'Table', 'List', 'Gauge', 'Chart'];
 
-const WIDGET_TYPES: WidgetType[] = ['MetricCard', 'DataChart', 'ActionLog', 'DataTable'];
-
-function clamp(n: number, min: number, max: number): number {
-  if (!Number.isFinite(n)) return min;
-  return Math.min(max, Math.max(min, Math.trunc(n)));
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
-function defaultProps(type: WidgetType, existing: Record<string, unknown>): Record<string, unknown> {
-  switch (type) {
-    case 'MetricCard':
-      return {
-        title: typeof existing.title === 'string' ? existing.title : 'Metric',
-        value: existing.value ?? 0,
-        ...(typeof existing.unit === 'string' ? { unit: existing.unit } : {}),
-      };
-    case 'DataChart':
-      return {
-        title: typeof existing.title === 'string' ? existing.title : 'Chart',
-        series: Array.isArray(existing.series) ? existing.series : [],
-      };
-    case 'ActionLog':
-      return { entries: Array.isArray(existing.entries) ? existing.entries : [] };
-    case 'DataTable':
-      return {
-        columns: Array.isArray(existing.columns) ? existing.columns.map(String) : ['id'],
-        rows: Array.isArray(existing.rows) ? existing.rows : [],
-      };
+/** Best-effort repair of common TUI schema mistakes for Self-Healing. */
+export function healTuiManifest(payload: unknown, _errors: string[] = []): unknown {
+  const root = asRecord(payload);
+  const layout = asRecord(root.layout);
+
+  let chunks = layout.chunks;
+  if (!Array.isArray(chunks) && Array.isArray(layout.widgets)) {
+    chunks = layout.widgets;
   }
-}
+  if (!Array.isArray(chunks)) chunks = [];
 
-/** Deterministic Self-Healing step (mock LLM). */
-export function healManifest(payload: unknown, _errors: string[]): DashboardManifest {
-  const raw = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
-  const layout = (raw.layout && typeof raw.layout === 'object' ? raw.layout : {}) as Record<
-    string,
-    unknown
-  >;
-  const widgetsRaw = Array.isArray(layout.widgets) ? layout.widgets : [];
-
-  const widgets = widgetsRaw.map((item, index) => {
-    const w = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
-    const size = (w.size && typeof w.size === 'object' ? w.size : {}) as Record<string, unknown>;
-    const type = WIDGET_TYPES.includes(w.type as WidgetType)
-      ? (w.type as WidgetType)
-      : 'MetricCard';
-    const propsRaw =
-      w.props && typeof w.props === 'object' ? (w.props as Record<string, unknown>) : {};
-
+  const fixedChunks = (chunks as unknown[]).map((raw, i) => {
+    const c = asRecord(raw);
+    let size = c.size;
+    if (size && typeof size === 'object') {
+      const s = asRecord(size);
+      const w = Number(s.w) || 1;
+      const h = Number(s.h) || 1;
+      size = Math.max(1, w + h);
+    }
+    if (typeof size !== 'number' || !Number.isInteger(size) || size < 1) {
+      size = 3;
+    }
+    let type = String(c.type ?? 'Paragraph');
+    if (!TYPES.includes(type as TuiWidgetType)) {
+      type = 'Paragraph';
+    }
+    let props = asRecord(c.props);
+    if (type === 'Paragraph' && typeof props.text !== 'string') {
+      props = { ...props, text: String(props.text ?? props.title ?? props.value ?? '') };
+    }
+    if (type === 'Table') {
+      if (!Array.isArray(props.headers)) props = { ...props, headers: ['col'] };
+      if (!Array.isArray(props.rows)) props = { ...props, rows: [] };
+    }
+    if (type === 'List' && !Array.isArray(props.items)) {
+      props = { ...props, items: [] };
+    }
+    if (type === 'Gauge' && typeof props.ratio !== 'number') {
+      props = { ...props, ratio: 0 };
+    }
+    if (type === 'Chart' && !Array.isArray(props.datasets)) {
+      props = { ...props, datasets: [{ name: 'series', data: [0] }] };
+    }
     return {
-      widgetId: typeof w.widgetId === 'string' && w.widgetId.length > 0 ? w.widgetId : `w_${index}`,
+      widgetId: String(c.widgetId ?? `w_${i + 1}`),
       type,
-      size: { w: clamp(Number(size.w), 1, 12), h: clamp(Number(size.h), 1, 6) },
-      props: defaultProps(type, propsRaw),
+      size,
+      props,
     };
   });
 
-  const operation = OPERATIONS.includes(raw.operation as ManifestOperation)
-    ? (raw.operation as ManifestOperation)
-    : 'SYNC_DASHBOARD';
+  let operation = String(root.operation ?? 'SYNC_DASHBOARD');
+  if (!OPS.includes(operation as TuiManifestOperation)) {
+    operation = 'SYNC_DASHBOARD';
+  }
 
-  return {
-    taskId: typeof raw.taskId === 'string' && raw.taskId.length > 0 ? raw.taskId : 'healed_task',
-    operation,
-    layout: { widgets },
+  const healed: TuiManifest = {
+    taskId: String(root.taskId ?? `task_${Date.now()}`),
+    operation: operation as TuiManifestOperation,
+    layout: {
+      direction:
+        layout.direction === 'horizontal' || layout.direction === 'vertical'
+          ? layout.direction
+          : 'vertical',
+      chunks: fixedChunks as TuiManifest['layout']['chunks'],
+    },
   };
+  return healed;
 }

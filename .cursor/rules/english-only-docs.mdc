@@ -1,0 +1,29 @@
+---
+description: English-only for committed docs and source comments; Russian scratch stays in docs/dev/
+alwaysApply: true
+---
+
+# English-only docs and code comments
+
+## Docs (committed)
+
+- Tracked Markdown is **English only**: `README.md`, `docs/**` (except ignored paths), `tui/README.md`, `.cursor/skills/**/*.md`, `.github/**/*.md`.
+- Do **not** commit Russian (or other non-English) product/spec docs.
+
+## Code comments
+
+- Comments and docstrings in committed source must be **English only**.
+- Applies to: `*.ts`, `*.tsx`, `*.js`, `*.mjs`, `*.rs`, `*.sql`, shell scripts, Dockerfiles, etc.
+- Prefer short why-comments; do not leave Russian TODOs, section headers, or inline notes in tracked code.
+
+## Local Russian / scratch
+
+- Informal or Russian working notes are allowed **only** under `docs/dev/` (gitignored).
+- Never `git add` `docs/dev/` or other ignored scratch paths.
+- Lasting design notes → English under tracked `docs/`.
+
+## Agent behavior
+
+- Editing tracked docs or adding comments → English.
+- User asks for Russian notes for themselves → `docs/dev/`, do not stage.
+- Do not mix languages in the same committed doc or comment block.

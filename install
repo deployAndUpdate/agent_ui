@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Visual Engine — one-shot setup after git clone.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
+
+need() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "missing required tool: $1" >&2
+    exit 1
+  fi
+}
+
+echo "==> checking tools"
+need node
+need npm
+need cargo
+need curl
+
+NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+if [[ "$NODE_MAJOR" -lt 20 ]]; then
+  echo "Node >= 20 required (found $(node -v))" >&2
+  exit 1
+fi
+
+echo "==> npm ci"
+if [[ -f package-lock.json ]]; then
+  npm ci
+else
+  npm install
+fi
+
+echo "==> cargo build --release (vae-tui)"
+cargo build --release --manifest-path tui/Cargo.toml
+
+if [[ ! -f .env ]]; then
+  cp .env.example .env
+  echo "==> created .env from .env.example"
+fi
+
+mkdir -p "$HOME/.local/bin"
+TUI_BIN="$ROOT/tui/target/release/vae-tui"
+if [[ -x "$TUI_BIN" ]]; then
+  ln -sfn "$TUI_BIN" "$HOME/.local/bin/vae-tui"
+  echo "==> linked vae-tui → ~/.local/bin/vae-tui (ensure ~/.local/bin is on PATH)"
+fi
+
+echo
+echo "Setup OK."
+echo "  Run:     ./vae"
+echo "  Demo:    ./vae --demo"
+echo "  Submit:  npm run agent -- submit --session demo --file examples/hello.tui.json"
+echo "  Stop:    ./vae stop"

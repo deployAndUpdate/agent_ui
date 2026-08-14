@@ -1,5 +1,5 @@
-import { validateManifest } from '@visual-engine/shared';
-import { healManifest } from './healManifest.js';
+import { validateTuiManifest } from '@visual-engine/tui-shared';
+import { healTuiManifest } from './healManifest.js';
 
 export interface AgentSubmitResult {
   ok: boolean;
@@ -8,10 +8,9 @@ export interface AgentSubmitResult {
   body?: unknown;
 }
 
-export async function submitManifestWithSelfHealing(options: {
+export async function submitTuiManifestWithSelfHealing(options: {
   apiBase: string;
   sessionId: string;
-  version: number;
   manifest: unknown;
   maxAttempts?: number;
   apiKey?: string;
@@ -29,12 +28,11 @@ export async function submitManifestWithSelfHealing(options: {
     if (options.apiKey) headers['X-API-Key'] = options.apiKey;
     if (options.idempotencyKey) headers['Idempotency-Key'] = `${options.idempotencyKey}:${attempts}`;
 
-    const res = await fetchFn(`${options.apiBase.replace(/\/$/, '')}/api/manifest`, {
+    const res = await fetchFn(`${options.apiBase.replace(/\/$/, '')}/api/v1/tui/manifest`, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         sessionId: options.sessionId,
-        version: options.version,
         manifest: current,
       }),
     });
@@ -47,9 +45,9 @@ export async function submitManifestWithSelfHealing(options: {
     const errors: string[] = Array.isArray((body as { errors?: string[] }).errors)
       ? (body as { errors: string[] }).errors
       : [];
-    current = healManifest(current, errors);
+    current = healTuiManifest(current, errors);
 
-    const check = validateManifest(current);
+    const check = validateTuiManifest(current);
     if (!check.ok && attempts >= maxAttempts) {
       return { ok: false, attempts, status: res.status, body };
     }

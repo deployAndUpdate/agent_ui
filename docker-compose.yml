@@ -1,5 +1,15 @@
+# Default (memory store):
+#   API_KEYS=dev-key docker compose up --build backend
+#
+# With Postgres:
+#   API_KEYS=secret docker compose --profile with-db up --build
+#
+# TUI always runs on the host (needs a real TTY):
+#   TUI_SESSION_ID=demo npm run dev:tui
+
 services:
   postgres:
+    profiles: ["with-db"]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: visual
@@ -20,12 +30,44 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     environment:
+      NODE_ENV: production
+      PORT: "3001"
+      DATABASE_URL: ${DATABASE_URL:-}
+      API_KEYS: ${API_KEYS:?set API_KEYS}
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OUTBOX_INTERVAL_MS: "100"
+      OUTBOX_MAX_ATTEMPTS: "5"
+      RATE_LIMIT_MAX: "300"
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  backend-db:
+    profiles: ["with-db"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      NODE_ENV: production
       PORT: "3001"
       DATABASE_URL: postgres://visual:visual@postgres:5432/visual_engine
-      API_KEYS: ${API_KEYS:-dev-key}
+      API_KEYS: ${API_KEYS:?set API_KEYS}
       AUTH_ENABLED: "true"
-      CORS_ORIGIN: "*"
-      LOG_LEVEL: info
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       OUTBOX_INTERVAL_MS: "100"
       OUTBOX_MAX_ATTEMPTS: "5"
       RATE_LIMIT_MAX: "300"
@@ -34,15 +76,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
-  frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
-    ports:
-      - "8080:80"
-    depends_on:
-      - backend
 
 volumes:
   pgdata:

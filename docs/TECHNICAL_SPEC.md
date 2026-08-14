@@ -1,131 +1,50 @@
-# Техническая спецификация: Visual Agent Engine
+# Technical specification: Visual Agent Engine (TUI)
 
-## 1. Общие сведения и назначение
+## 1. Purpose
 
-Система **Visual Agent Engine** предназначена для автономного создания, рендеринга и управления пользовательскими интерфейсами (дашбордами, формами, виджетами) со стороны ИИ-агента (работающего через CLI/скиллы).
+**Visual Agent Engine** is a terminal Server-Driven UI: an AI agent publishes a JSON manifest, the backend validates it (AJV), persists it, and pushes updates over WebSocket to a **Ratatui** client.
 
-Пайплайн исключает генерацию «сырого» HTML/JS, используя подход **Server-Driven UI (SDUI)** с жёстким детерминированным набором компонентов (**Component Registry**) и петлёй самоисправления (**Self-Healing Loop**).
+Web / React / Scene Graph are **removed**. The only client is `tui/`.
 
-## 2. Архитектура пайплайна (End-to-End Flow)
+## 2. Pipeline
 
 ```
-[CLI Agent] ---> (JSON Manifest) ---> [Validator Service (AJV)]
-                                           │
-                         ┌─────────────────┴─────────────────┐
-                     [Invalid]                           [Valid]
-                         │                                   │
-                  (Return 400 Error)               [Transactional Outbox]
-                         │                                   │
-                  [Agent Retry]                      [WebSocket Stream]
-                                                             │
-                                                  [Frontend Visual Engine]
-                                                             │
-                                                   (Framer Motion Layout)
+[CLI Agent] → TuiManifest JSON → [AJV Gatekeeper]
+                                      │
+                         ┌────────────┴────────────┐
+                     [400]                      [Valid]
+                         │                          │
+                  [Self-Healing]            [tui_sessions + tui_outbox]
+                                                    │
+                                            [WS RENDER_MANIFEST]
+                                                    │
+                                              [Ratatui tui/]
 ```
 
-| Этап | Описание |
-|------|----------|
-| **Генерация** | Агент обрабатывает запрос, собирает данные и формирует JSON-манифест по схеме |
-| **Валидация (Gatekeeper)** | Бэкенд проверяет манифест через AJV (JSON Schema). При ошибке — HTTP 400; агент корректирует структуру (Self-Healing) |
-| **Доставка** | Событие пишется в `outbox_events`; консюмер пушит манифест клиенту по WebSocket |
-| **Рендеринг** | Фронтенд сопоставляет типы с реестром и перестраивает UI (Framer Motion) |
+## 3. Contract — TuiManifest
 
-## 3. Контракт данных (JSON Schema DTO)
+Schema: `packages/tui-shared/schemas/tui-manifest.schema.json`.
 
-Строгий контракт, который обязан возвращать агент. Канонический файл схемы: `packages/shared/schemas/dashboard-manifest.schema.json`.
+Types: `Paragraph`, `Table`, `List`, `Gauge`, `Chart`.  
+Layout: `direction` + `chunks[]` (`widgetId`, `type`, integer `size`, `props`).
 
-```json
-{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "DashboardManifest",
-  "type": "object",
-  "properties": {
-    "taskId": {
-      "type": "string",
-      "description": "Уникальный идентификатор сессии задачи"
-    },
-    "operation": {
-      "type": "string",
-      "enum": ["SYNC_DASHBOARD", "ADD_WIDGET", "UPDATE_WIDGET", "REMOVE_WIDGET"],
-      "description": "Тип операции с бордой"
-    },
-    "layout": {
-      "type": "object",
-      "properties": {
-        "widgets": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "widgetId": { "type": "string" },
-              "type": {
-                "type": "string",
-                "enum": ["MetricCard", "DataChart", "ActionLog", "DataTable"]
-              },
-              "size": {
-                "type": "object",
-                "properties": {
-                  "w": { "type": "integer", "minimum": 1, "maximum": 12 },
-                  "h": { "type": "integer", "minimum": 1, "maximum": 6 }
-                },
-                "required": ["w", "h"]
-              },
-              "props": {
-                "type": "object",
-                "description": "Специфичные данные для конкретного компонента"
-              }
-            },
-            "required": ["widgetId", "type", "size", "props"]
-          }
-        }
-      },
-      "required": ["widgets"]
-    }
-  },
-  "required": ["taskId", "operation", "layout"]
-}
-```
+## 4. API
 
-### Событие взаимодействия виджета (client → backend)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/tui/manifest` | Accept manifest |
+| GET | `/api/v1/tui/session/:sessionId` | Latest snapshot |
+| POST | `/api/v1/tui/action` | USER_ACTION |
+| WS | `/api/v1/tui/stream?sessionId=` | Realtime |
+| GET | `/health` | Liveness |
+| GET | `/ready` | Readiness |
 
-```json
-{
-  "type": "widget_interaction",
-  "taskId": "req_88231",
-  "widgetId": "w_01",
-  "action": "export_csv",
-  "payload": { "format": "csv" },
-  "timestamp": "2026-06-06T12:00:00Z"
-}
-```
+Default port: `3001`.
 
-## 4. Фронтенд-движок (Visual Engine)
+## 5. Database
 
-- **Контейнер**: React, маппинг манифеста → 12-колоночная сетка (Tailwind CSS).
-- **Реестр**: `MetricCard`, `DataChart`, `ActionLog`, `DataTable`.
-- **Анимации**: Framer Motion (`layout`) для снижения CLS при resize/remove.
-- **Обратная связь**: клики/формы/экспорт → стандартизированное событие на бэкенд.
+Tables: `tui_sessions`, `tui_outbox`, `tui_actions`, `tui_idempotency_keys` (`backend/migrations/001_tui.sql`).
 
-## 5. Инфраструктура и состояние
+## 6. Self-Healing
 
-| Паттерн | Требование |
-|---------|------------|
-| **Transactional Outbox** | Манифест и бизнес-транзакция пишутся в БД (PostgreSQL / in-memory store в тестах) атомарно в `outbox_events` |
-| **Persisted Dashboards** | Таблица `dashboards`: последний успешный JSON-снимок по `session_id`. `GET /api/dashboard/{session_id}` |
-| **Optimistic Locking** | Консюмер сверяет инкрементальный `version` / `timestamp`, чтобы устаревший ответ агента не перезаписал свежий |
-
-### HTTP API (минимальный контракт)
-
-| Метод | Путь | Описание |
-|-------|------|----------|
-| `POST` | `/api/manifest` | Приём манифеста от агента; валидация AJV; 400 / outbox |
-| `GET` | `/api/dashboard/:sessionId` | Актуальный снимок борды |
-| `POST` | `/api/widget-interaction` | События от виджетов |
-| `WS` | `/ws?sessionId=` | Realtime-поток обновлений манифеста |
-
-## 6. Self-Healing Loop
-
-1. Агент отправляет манифест.
-2. Gatekeeper возвращает 400 + AJV-ошибки.
-3. Агент (или mock-слой в тестах) корректирует JSON и повторяет запрос.
-4. Успех → outbox → WebSocket → UI.
+CLI (`npm run agent -- submit`) on HTTP 400 repairs common mistakes (`widgets`→`chunks`, `{w,h}`→`size`, unknown type→`Paragraph`) and retries.

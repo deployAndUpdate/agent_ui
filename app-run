@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Deprecated alias — use ./vae
+exec "$(cd "$(dirname "$0")" && pwd)/vae" "$@"

@@ -1,73 +1,79 @@
 # Visual Agent Engine
 
-Server-Driven UI: агент → JSON Manifest → AJV Gatekeeper → Transactional Outbox → WebSocket → React Visual Engine.
+Server-Driven **TUI**: agent → JSON `TuiManifest` → AJV → outbox → WebSocket → **Ratatui**.
 
-## Документация
+This is an orchestrator plus a terminal browser. There is no LLM inside.
 
-- [Техническая спецификация](docs/TECHNICAL_SPEC.md)
-- [Декомпозиция](docs/DECOMPOSITION.md)
-- [Пирамида тестирования](docs/TESTING_PYRAMID.md)
-- [Roadmap 1–13](docs/ROADMAP_1_13.md)
-- [Цели](docs/goals/)
+[![CI](https://img.shields.io/badge/CI-github%20actions-blue)](.github/workflows/ci.yml)
 
-## Быстрый старт (локально, in-memory)
+## Requirements
 
-```bash
-npm install
-npm test
-npm run test:e2e -w frontend   # Playwright
+- Node.js ≥ 20
+- Rust stable (`cargo`)
+- UTF-8 terminal, recommended ≥ 80×24
+- Linux / macOS / WSL2
 
-# терминал 1
-npm run dev:backend
-
-# терминал 2
-npm run dev:frontend
-# http://localhost:5173/?sessionId=demo
-```
-
-Отправить манифест:
+## Quick start (utility)
 
 ```bash
-curl -s http://127.0.0.1:3001/api/manifest -H 'content-type: application/json' -d '{
-  "sessionId":"demo","version":1,
-  "manifest":{
-    "taskId":"t1","operation":"SYNC_DASHBOARD",
-    "layout":{"widgets":[{
-      "widgetId":"w_01","type":"MetricCard",
-      "size":{"w":4,"h":2},
-      "props":{"title":"Users","value":42}
-    }]}
-  }
-}'
+git clone <repo> && cd visual_engine
+./install
+./vae --demo
 ```
 
-CLI Self-Healing агент:
+Stop the backend with `./vae stop`.
+
+Push a manifest:
 
 ```bash
-npm run agent -- submit --session demo --version 2 --file backend/tests/fixtures/manifest.invalid.json
+npm run agent -- submit --session demo --file examples/hello.tui.json
+# aliases: visual-agent / vae-agent (after npm link -w @visual-engine/cli)
 ```
 
-## Docker (Postgres)
+Smoke without TUI:
 
 ```bash
-API_KEYS=dev-key docker compose up --build
-# UI: http://localhost:8080/?sessionId=demo&apiKey=dev-key
-# API: http://localhost:3001
+./vae smoke
 ```
 
-## Агент (Cursor Skill)
+## Docker (backend)
 
-В репозитории: `.cursor/skills/visual-agent-engine/`.
+```bash
+# in-memory
+API_KEYS=dev-key docker compose up --build backend
 
-Агент сам подхватит skill при запросах про дашборд / виджеты / SDUI. Явно: «используй skill visual-agent-engine».
+# Postgres
+API_KEYS=secret docker compose --profile with-db up --build
+```
 
-Лично для всех проектов можно скопировать папку в `~/.cursor/skills/visual-agent-engine/`.
+Always run the TUI on the host (needs a TTY):
 
-## Пакеты
+```bash
+TUI_SESSION_ID=demo npm run dev:tui
+# or: cargo install --path tui   → vae-tui
+```
 
-| Пакет | Назначение |
-|-------|------------|
-| `@visual-engine/shared` | Schema, props schemas, AJV, applyLayoutOperation |
-| `@visual-engine/cli` | CLI submit + Self-Healing |
-| `backend` | API, Outbox, WS, Postgres/memory, auth |
-| `frontend` | VisualEngine + live session hook |
+## Env
+
+See [`.env.example`](.env.example). With `NODE_ENV=production`, `API_KEYS` is required (or set `AUTH_ENABLED=false` explicitly).
+
+## Docs
+
+- [Technical spec](docs/TECHNICAL_SPEC.md)
+- [Prod checklist](docs/PROD.md)
+- Skill: `.cursor/skills/visual-agent-engine/`
+
+Local/scratch notes (may be non-English) live under `docs/dev/` and are **not** committed.
+
+## Packages
+
+| Path | Role |
+|------|------|
+| `packages/tui-shared` | JSON Schema + AJV |
+| `packages/cli` | `visual-agent` / `vae-agent` submit |
+| `backend` | HTTP + WS + outbox |
+| `tui/` | Ratatui client (`vae-tui`) |
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { submitManifestWithSelfHealing } from '../src/submit.js';
+import { submitTuiManifestWithSelfHealing } from '../src/submit.js';
 
-describe('CLI self-healing submit (unit)', () => {
+describe('CLI TUI self-healing submit (unit)', () => {
   it('retries after 400 then succeeds', async () => {
     const fetchImpl = vi
       .fn()
@@ -14,10 +14,9 @@ describe('CLI self-healing submit (unit)', () => {
         json: async () => ({ ok: true }),
       });
 
-    const result = await submitManifestWithSelfHealing({
+    const result = await submitTuiManifestWithSelfHealing({
       apiBase: 'http://api',
       sessionId: 's1',
-      version: 1,
       manifest: {
         taskId: 't',
         operation: 'SYNC_BOARD',
@@ -39,5 +38,7 @@ describe('CLI self-healing submit (unit)', () => {
     expect(result.ok).toBe(true);
     expect(result.attempts).toBe(2);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const body = JSON.parse((fetchImpl.mock.calls[1]![1] as RequestInit).body as string);
+    expect(body.manifest.layout.chunks[0].type).toBe('Paragraph');
   });
 });

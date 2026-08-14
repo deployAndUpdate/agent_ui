@@ -1,162 +1,142 @@
 ---
 name: visual-agent-engine
 description: >-
-  Builds and publishes Server-Driven UI dashboards via Visual Agent Engine
-  (JSON DashboardManifest → AJV gatekeeper → outbox → WebSocket UI). Use when
-  the user asks to create/update a dashboard, widgets, MetricCard, DataChart,
-  ActionLog, DataTable, SDUI UI, visual-engine, or to push a manifest to the
-  Visual Agent Engine / visual-agent CLI.
+  Builds and publishes Server-Driven UI dashboards via Visual Agent Engine TUI
+  track (TuiManifest → AJV → /api/v1/tui/manifest → Ratatui). Use when the user
+  asks to create/update a dashboard, widgets, Paragraph, Table, List, Gauge,
+  Chart, SDUI UI, visual-engine, TUI, or to push a manifest to the Visual Agent
+  Engine / visual-agent CLI.
 ---
 
-# Visual Agent Engine
+# Visual Agent Engine (TUI only)
 
-Never generate raw HTML/JS for the dashboard. Only emit a **DashboardManifest** JSON and submit it through the engine API/CLI.
+Never generate raw HTML/JS/React. Emit a **TuiManifest** JSON and submit it to the TUI API/CLI. The client is Ratatui (`npm run dev:tui`).
 
 ## Prerequisites
 
-From repo root `visual_engine` (or path where this project lives):
+From repo root `visual_engine`:
 
-1. Backend: `npm run dev:backend` → `http://127.0.0.1:3001`
-2. Frontend: `npm run dev:frontend` → `http://localhost:5173/?sessionId=<SESSION>`
+1. `./install` (once) — Node, npm ci, release `vae-tui`
+2. Backend+TUI: `./vae` or `./vae --demo`
 3. Optional auth: `X-API-Key` / `VISUAL_ENGINE_API_KEY` when `AUTH_ENABLED=true`
-
-If services are down, start them before submitting.
 
 ## Workflow (always)
 
 ```
 Task:
-- [ ] 1. Choose sessionId + next version
-- [ ] 2. Write manifest JSON (schema-valid)
-- [ ] 3. Submit via CLI (self-healing)
-- [ ] 4. On failure: fix from API errors, resubmit with same or next version as needed
-- [ ] 5. Tell user the UI URL
+- [ ] 1. Choose sessionId
+- [ ] 2. Write TuiManifest JSON (schema-valid)
+- [ ] 3. Submit via CLI (self-healing) or curl
+- [ ] 4. On 400: fix from errors[], resubmit
+- [ ] 5. Tell user to view npm run dev:tui (same sessionId)
 ```
 
-### 1. Session + version
+### 1. Session
 
-- Default `sessionId`: `demo` (or user-provided).
-- `version` must be a **positive integer** and **strictly greater** than the current dashboard version.
-- First push for a new session: `version: 1`.
-- After success, increment for the next change (`2`, `3`, …).
-- Check current snapshot if unsure:
+- Default `sessionId`: `demo` (or user-provided)
+- No web `version` lock — last-write-wins
+- Optional check:
 
 ```bash
-curl -s "http://127.0.0.1:3001/api/dashboard/<SESSION>"
+curl -s "http://127.0.0.1:3001/api/v1/tui/session/<SESSION>"
 ```
 
-404 → session empty → start at version `1`.
+404 → empty session.
 
 ### 2. Write the manifest
 
-Save to a temp file, e.g. `/tmp/vae-manifest.json` or `./.vae/manifest.json`.
+Save e.g. `./.vae/manifest.tui.json`.
 
 **Hard rules:**
 
-- `operation`: one of `SYNC_DASHBOARD` | `ADD_WIDGET` | `UPDATE_WIDGET` | `REMOVE_WIDGET`
-- Widget `type`: only `MetricCard` | `DataChart` | `ActionLog` | `DataTable`
-- `size.w`: 1–12, `size.h`: 1–6
-- Required widget fields: `widgetId`, `type`, `size`, `props`
-- Props must match the widget type (see [reference.md](reference.md))
-- Prefer `SYNC_DASHBOARD` for a full board; use ADD/UPDATE/REMOVE for deltas
-
-Minimal template:
+- `operation`: `SYNC_DASHBOARD` | `ADD_WIDGET` | `UPDATE_WIDGET` | `REMOVE_WIDGET`
+- Chunk `type`: only `Paragraph` | `Table` | `List` | `Gauge` | `Chart`
+- Chunk `size`: positive integer (row weight / height hint) — **not** `{w,h}`
+- Required: `widgetId`, `type`, `size`, `props`
+- `layout.direction`: `vertical` | `horizontal`
+- Props: [reference.md](reference.md)
+- Prefer `SYNC_DASHBOARD` for a full board
+- **Dumb templates** — all text/numbers come from `props`
 
 ```json
 {
   "taskId": "req_<short_id>",
   "operation": "SYNC_DASHBOARD",
   "layout": {
-    "widgets": [
+    "direction": "vertical",
+    "chunks": [
       {
-        "widgetId": "w_01",
-        "type": "MetricCard",
-        "size": { "w": 4, "h": 2 },
-        "props": { "title": "Users", "value": 42 }
+        "widgetId": "w_header",
+        "type": "Paragraph",
+        "size": 3,
+        "props": { "title": "Hello", "text": "TUI board", "style": "cyan" }
       }
     ]
   }
 }
 ```
 
-More examples: [examples.md](examples.md). Full props: [reference.md](reference.md).
+More: [examples.md](examples.md).
 
-### 3. Submit (preferred)
-
-From repo root:
+### 3. Submit (preferred CLI)
 
 ```bash
 npm run agent -- submit \
   --session <SESSION> \
-  --version <N> \
-  --file <PATH_TO_MANIFEST.json>
+  --file <PATH_TO_TUI_MANIFEST.json>
 ```
 
-With auth / custom API:
+Self-Healing on HTTP 400 (up to 3). Prefer a valid manifest first.
+
+Raw HTTP:
 
 ```bash
-npm run agent -- submit \
-  --session <SESSION> \
-  --version <N> \
-  --file <PATH_TO_MANIFEST.json> \
-  --api http://127.0.0.1:3001 \
-  --api-key "$VISUAL_ENGINE_API_KEY"
-```
-
-CLI runs **Self-Healing**: on HTTP 400 it repairs common schema mistakes and retries (up to 3). Still prefer emitting a valid manifest first.
-
-### 4. Alternative: raw HTTP
-
-```bash
-curl -s http://127.0.0.1:3001/api/manifest \
+curl -s http://127.0.0.1:3001/api/v1/tui/manifest \
   -H 'content-type: application/json' \
-  -H "Idempotency-Key: <unique-per-logical-request>" \
+  -H "Idempotency-Key: <unique>" \
   -H "X-API-Key: $VISUAL_ENGINE_API_KEY" \
-  -d "{\"sessionId\":\"<SESSION>\",\"version\":<N>,\"manifest\":$(cat <PATH_TO_MANIFEST.json>)}"
+  -d "{\"sessionId\":\"<SESSION>\",\"manifest\":$(cat <TUI.json>)}"
 ```
 
-- `200` → success (`outboxEventId` in body); UI updates over WS
-- `400` → read `errors[]`, fix JSON, retry (same version if not accepted)
-- `409` → stale/optimistic lock → bump `version` after GET snapshot
-- `401` → missing/wrong API key
+- `200` → outbox → WS → Ratatui redraw
+- `400` → fix `errors[]`
+- `401` → API key
 
-### 5. User-facing result
+### 4. User-facing result
 
 Always return:
 
-- UI link: `http://localhost:5173/?sessionId=<SESSION>` (add `&apiKey=...` if auth)
-- `sessionId`, `version`, operation used
-- Brief list of widgets created/updated
+- How to view: `TUI_SESSION_ID=<SESSION> npm run dev:tui`
+- `sessionId`, `taskId`, operation
+- Brief list of chunks
 
-## Widget interaction loop
+## Interaction
 
-User actions POST to `/api/widget-interaction` as:
+WS or `POST /api/v1/tui/action`:
 
 ```json
 {
-  "type": "widget_interaction",
+  "event": "USER_ACTION",
   "taskId": "req_...",
-  "widgetId": "w_01",
-  "action": "export_csv",
-  "payload": { "format": "csv" },
-  "timestamp": "2026-06-06T12:00:00Z"
+  "widgetId": "w_results",
+  "action": "select_row",
+  "payload": { "rowIndex": 0 }
 }
 ```
 
-When the user asks to react to UI actions: inspect the request/payload, then push an `UPDATE_WIDGET` / `ADD_WIDGET` / `SYNC_DASHBOARD` with the next version.
+When reacting: push a new `SYNC_DASHBOARD` / delta with updated chunks.
 
 ## Do / Don't
 
 | Do | Don't |
 |----|-------|
-| Use only registry widget types | Emit HTML, JSX, or chart libraries as code |
-| Increment version per accepted write | Reuse a version that already succeeded |
-| Validate props per widget type | Put unknown `type` values |
-| Use CLI submit for healing | Claim the UI updated without a successful submit |
+| TUI types only | MetricCard / DataChart / React / HTML |
+| `layout.chunks` + integer `size` | `layout.widgets` + `{w,h}` |
+| CLI or `/api/v1/tui/manifest` | Claim UI updated without 200 |
 
 ## Repo map
 
-- Schema: `packages/shared/schemas/dashboard-manifest.schema.json`
-- Props: `packages/shared/schemas/props/*.props.schema.json`
+- Schema: `packages/tui-shared/schemas/tui-manifest.schema.json`
 - CLI: `packages/cli` (`npm run agent -- submit ...`)
+- Client: `tui/` (Ratatui)
 - Spec: `docs/TECHNICAL_SPEC.md`

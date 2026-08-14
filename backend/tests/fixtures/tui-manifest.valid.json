@@ -1,0 +1,31 @@
+{
+  "taskId": "task_7749",
+  "operation": "SYNC_DASHBOARD",
+  "layout": {
+    "direction": "vertical",
+    "chunks": [
+      {
+        "widgetId": "w_header",
+        "type": "Paragraph",
+        "size": 3,
+        "props": {
+          "title": "Agent Execution Panel",
+          "text": "Status: Searching local files...",
+          "style": "cyan"
+        }
+      },
+      {
+        "widgetId": "w_results",
+        "type": "Table",
+        "size": 12,
+        "props": {
+          "headers": ["File", "Lines", "Match Score"],
+          "rows": [
+            ["src/main.rs", "142", "0.98"],
+            ["src/engine.rs", "85", "0.91"]
+          ]
+        }
+      }
+    ]
+  }
+}

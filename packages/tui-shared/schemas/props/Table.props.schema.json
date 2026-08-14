@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TableProps",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "headers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    }
+  },
+  "required": ["headers", "rows"]
+}

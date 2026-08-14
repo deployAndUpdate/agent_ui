@@ -2,11 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, feature/**]
   pull_request:
 
 jobs:
-  unit:
+  node:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,10 +16,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - run: npm audit --audit-level=high || true
 
-  e2e:
+  rust:
     runs-on: ubuntu-latest
-    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui
+      - run: cargo test --manifest-path tui/Cargo.toml
+      - run: cargo build --release --manifest-path tui/Cargo.toml
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: [node, rust]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,8 +39,9 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
-        working-directory: frontend
-      - run: npm run test:e2e -w frontend
-        env:
-          CI: true
+      - run: |
+          npm run start:backend &
+          for i in $(seq 1 40); do curl -sf http://127.0.0.1:3001/ready && break; sleep 0.25; done
+          npm run agent -- submit --session demo --file examples/hello.tui.json
+          curl -sf http://127.0.0.1:3001/api/v1/tui/session/demo >/dev/null
+          echo smoke-ok

@@ -1,91 +1,80 @@
-# Visual Agent Engine — reference
+# Visual Agent Engine — TUI reference
 
-## Envelope for POST `/api/manifest`
+## Envelope — POST `/api/v1/tui/manifest`
 
 ```json
 {
   "sessionId": "demo",
-  "version": 1,
-  "manifest": { "...DashboardManifest..." },
-  "idempotencyKey": "optional-if-not-using-header"
+  "manifest": { "...TuiManifest..." }
 }
 ```
 
 Headers:
 
-- `Idempotency-Key` — replay-safe retries of the **same** logical write
-- `X-API-Key` — required when auth enabled
+- `Idempotency-Key` — optional replay-safe retries
+- `X-API-Key` — when auth enabled
 
-## DashboardManifest
+No `version` field (last-write-wins).
+
+## TuiManifest
 
 | Field | Rules |
 |-------|--------|
 | `taskId` | non-empty string |
 | `operation` | `SYNC_DASHBOARD` \| `ADD_WIDGET` \| `UPDATE_WIDGET` \| `REMOVE_WIDGET` |
-| `layout.widgets` | array of widgets |
+| `layout.direction` | `vertical` \| `horizontal` (optional) |
+| `layout.chunks` | array of chunks |
 
-### Operations
-
-| Operation | Meaning of `layout.widgets` |
-|-----------|------------------------------|
-| `SYNC_DASHBOARD` | Full replace of board |
-| `ADD_WIDGET` | Upsert listed widgets into existing board |
-| `UPDATE_WIDGET` | Replace existing widgets by `widgetId` |
-| `REMOVE_WIDGET` | Remove widgets by `widgetId` (props may be empty `{}`) |
-
-### Widget common fields
+### Chunk fields
 
 | Field | Rules |
 |-------|--------|
-| `widgetId` | non-empty string, stable id |
-| `type` | `MetricCard` \| `DataChart` \| `ActionLog` \| `DataTable` |
-| `size.w` | integer 1..12 |
-| `size.h` | integer 1..6 |
-| `props` | object; schema depends on `type` (skipped for `REMOVE_WIDGET`) |
+| `widgetId` | non-empty string |
+| `type` | `Paragraph` \| `Table` \| `List` \| `Gauge` \| `Chart` |
+| `size` | integer ≥ 1 |
+| `props` | object per type |
 
 ## Props by type
 
-### MetricCard
+### Paragraph
 
-Required: `title` (string), `value` (any)  
-Optional: `unit` (string)
+Required: `text`  
+Optional: `title`, `style` (`default` \| `cyan` \| `green` \| `yellow` \| `red` \| `magenta` \| `blue` \| `white`)
 
-### DataChart
+### Table
 
-Required: `title` (string), `series` (array)  
-Each series item: `{ "name": string, "points": number[] }`
+Required: `headers` (string[]), `rows` (string[][])
 
-### ActionLog
+### List
 
-Required: `entries` (array)  
-Each entry: `{ "at": string, "text": string }` (ISO timestamp preferred)
+Required: `items` (string[])  
+Optional: `title`, `selectedIndex`
 
-### DataTable
+### Gauge
 
-Required: `columns` (string[], min 1), `rows` (object[])
+Required: `ratio` (0..1)  
+Optional: `title`, `label`
 
-## Grid layout tips
+### Chart
 
-- 12-column grid; `w: 4` ≈ one third, `w: 6` half, `w: 12` full width
-- Keep `h` small (2–3) for metrics; 3–4 for charts/tables
-- Unique `widgetId` per widget (`w_01`, `w_revenue`, …)
+Required: `datasets` — `[{ "name", "data": number[] }]`  
+Optional: `title`
 
 ## Env
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `VISUAL_ENGINE_API` | `http://127.0.0.1:3001` | CLI API base |
-| `VISUAL_ENGINE_API_KEY` | — | CLI / UI auth |
-| `AUTH_ENABLED` | false | backend auth switch |
-| `API_KEYS` | — | comma-separated valid keys |
-| `DATABASE_URL` | unset = memory | Postgres |
+| Variable | Default |
+|----------|---------|
+| `VISUAL_ENGINE_API` | `http://127.0.0.1:3001` |
+| `VISUAL_ENGINE_API_KEY` | — |
+| `TUI_WS_URL` | `ws://127.0.0.1:3001/api/v1/tui/stream?sessionId=demo` |
+| `TUI_SESSION_ID` | `demo` |
 
 ## Endpoints
 
 | Method | Path | Notes |
 |--------|------|-------|
-| POST | `/api/manifest` | validate + persist + outbox |
-| GET | `/api/dashboard/:sessionId` | latest snapshot |
-| POST | `/api/widget-interaction` | UI events |
-| WS | `/ws?sessionId=` | `dashboard_update` messages |
+| POST | `/api/v1/tui/manifest` | validate + persist + outbox |
+| GET | `/api/v1/tui/session/:sessionId` | latest snapshot |
+| POST | `/api/v1/tui/action` | USER_ACTION HTTP |
+| WS | `/api/v1/tui/stream?sessionId=` | RENDER_MANIFEST / USER_ACTION |
 | GET | `/health` | liveness |

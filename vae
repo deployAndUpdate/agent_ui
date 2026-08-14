@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+# Visual Engine — run backend (+ TUI) as a local utility.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
+
+# shellcheck disable=SC1091
+[[ -f "$ROOT/.env" ]] && set -a && source "$ROOT/.env" && set +a
+
+SESSION="${TUI_SESSION_ID:-${SESSION_ID:-demo}}"
+API="${VISUAL_ENGINE_API:-http://127.0.0.1:3001}"
+PORT="${PORT:-3001}"
+RUN_DIR="$ROOT/.app-run"
+PID_BACKEND="$RUN_DIR/backend.pid"
+LOG_BACKEND="$RUN_DIR/backend.log"
+DEMO=0
+NO_TUI=0
+MODE=up
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./vae                 start backend + TUI (foreground TUI when interactive)
+  ./vae --demo          start, push examples/hello.tui.json, then TUI
+  ./vae --no-tui        backend only
+  ./vae stop | status | smoke
+
+Env: see .env.example (PORT, TUI_SESSION_ID, API_KEYS, DATABASE_URL, …)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --demo) DEMO=1; shift ;;
+    --no-tui) NO_TUI=1; shift ;;
+    --session) SESSION="$2"; shift 2 ;;
+    stop|status|smoke|up) MODE="$1"; shift ;;
+    *) echo "unknown arg: $1" >&2; usage; exit 1 ;;
+  esac
+done
+
+mkdir -p "$RUN_DIR"
+
+is_alive() {
+  local pid_file="$1"
+  [[ -f "$pid_file" ]] || return 1
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+kill_pidfile() {
+  local pid_file="$1"
+  local name="$2"
+  [[ -f "$pid_file" ]] || return 0
+  local pid
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "${pid:-}" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 30); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -9 -- "-$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true
+    echo "stopped $name (pid $pid)"
+  fi
+  rm -f "$pid_file"
+}
+
+wait_health() {
+  echo -n "waiting for $API/health …"
+  for _ in $(seq 1 80); do
+    if curl -sf "$API/health" >/dev/null 2>&1; then
+      echo " ok"
+      return 0
+    fi
+    echo -n "."
+    sleep 0.25
+  done
+  echo
+  echo "backend unhealthy; see $LOG_BACKEND" >&2
+  return 1
+}
+
+start_backend() {
+  if is_alive "$PID_BACKEND"; then
+    echo "backend already running (pid $(cat "$PID_BACKEND"))"
+    return 0
+  fi
+  if curl -sf "$API/health" >/dev/null 2>&1; then
+    echo "backend already listening (external)"
+    return 0
+  fi
+  echo "starting backend → $LOG_BACKEND"
+  if [[ "${NODE_ENV:-}" == "production" ]]; then
+    setsid npm run start:backend >"$LOG_BACKEND" 2>&1 < /dev/null &
+  else
+    setsid npm run dev:backend >"$LOG_BACKEND" 2>&1 < /dev/null &
+  fi
+  echo $! >"$PID_BACKEND"
+  wait_health
+}
+
+push_demo() {
+  echo "pushing examples/hello.tui.json → session=$SESSION"
+  npm run agent -- submit --session "$SESSION" --file "$ROOT/examples/hello.tui.json"
+}
+
+cmd_stop() {
+  kill_pidfile "$PID_BACKEND" "backend"
+  echo "done"
+}
+
+cmd_status() {
+  if is_alive "$PID_BACKEND"; then echo "backend: running pid=$(cat "$PID_BACKEND")"; else echo "backend: stopped"; fi
+  if curl -sf "$API/health" >/dev/null 2>&1; then echo "api: $API healthy"; else echo "api: not reachable"; fi
+  if curl -sf "$API/ready" >/dev/null 2>&1; then echo "ready: ok"; else echo "ready: not ok"; fi
+}
+
+cmd_smoke() {
+  start_backend
+  curl -sf "$API/health" >/dev/null
+  curl -sf "$API/ready" >/dev/null
+  npm run agent -- submit --session "$SESSION" --file "$ROOT/examples/hello.tui.json" >/dev/null
+  curl -sf "$API/api/v1/tui/session/$SESSION" >/dev/null
+  echo "smoke OK (session=$SESSION)"
+}
+
+case "$MODE" in
+  stop) cmd_stop ;;
+  status) cmd_status ;;
+  smoke) cmd_smoke ;;
+  up)
+    start_backend
+    if [[ "$DEMO" == "1" ]]; then
+      push_demo
+    fi
+    if [[ "$NO_TUI" == "1" ]]; then
+      echo "backend only · session=$SESSION"
+      echo "submit: npm run agent -- submit --session $SESSION --file examples/hello.tui.json"
+      echo "tui:    TUI_SESSION_ID=$SESSION npm run dev:tui"
+      echo "stop:   ./vae stop"
+      exit 0
+    fi
+    export TUI_SESSION_ID="$SESSION"
+    export TUI_WS_URL="${TUI_WS_URL:-ws://127.0.0.1:${PORT}/api/v1/tui/stream?sessionId=${SESSION}}"
+    echo "backend up · TUI session=$SESSION (q to quit TUI; then ./vae stop)"
+    if [[ -x "$ROOT/tui/target/release/vae-tui" ]]; then
+      exec "$ROOT/tui/target/release/vae-tui"
+    else
+      exec cargo run --release --manifest-path "$ROOT/tui/Cargo.toml"
+    fi
+    ;;
+  *) usage; exit 1 ;;
+esac

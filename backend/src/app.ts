@@ -1,15 +1,17 @@
-import express, { type Express, type Request, type Response } from 'express';
+import express, { type Express } from 'express';
 import cors from 'cors';
-import { validateManifest, type WidgetInteractionEvent } from '@visual-engine/shared';
-import type { DashboardStore } from './store/types.js';
 import type { AppConfig } from './config.js';
 import { createAuthMiddleware, createRateLimitMiddleware } from './middleware/security.js';
 import { createLogger, type Logger } from './logging/logger.js';
+import type { TuiStore } from './tui/store/types.js';
+import { createTuiRouter } from './tui/routes.js';
 
 export interface AppDeps {
-  store: DashboardStore;
+  tuiStore: TuiStore;
   config?: AppConfig;
   logger?: Logger;
+  /** When false, /ready returns 503 (e.g. DB down). */
+  isReady?: () => boolean | Promise<boolean>;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -30,88 +32,33 @@ export function createApp(deps: AppDeps): Express {
   }
 
   app.get('/health', (_req, res) => {
-    res.status(200).json({ ok: true });
-  });
-
-  app.post('/api/manifest', async (req: Request, res: Response) => {
-    const { sessionId, version, manifest } = req.body ?? {};
-    const idempotencyKey =
-      (typeof req.header('idempotency-key') === 'string' && req.header('idempotency-key')) ||
-      (typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey : undefined);
-
-    if (typeof sessionId !== 'string' || sessionId.length === 0) {
-      res.status(400).json({ errors: ['sessionId is required'] });
-      return;
-    }
-    if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
-      res.status(400).json({ errors: ['version must be a positive integer'] });
-      return;
-    }
-
-    const validation = validateManifest(manifest);
-    if (!validation.ok) {
-      log.info({ errors: validation.errors, sessionId }, 'manifest rejected');
-      res.status(400).json({ errors: validation.errors });
-      return;
-    }
-
-    const result = await deps.store.saveDashboardWithOutbox({
-      sessionId,
-      version,
-      manifest: validation.data,
-      idempotencyKey,
-    });
-
-    if (!result.ok) {
-      res.status(409).json({ errors: [`optimistic lock: ${result.reason}`] });
-      return;
-    }
-
-    log.info(
-      {
-        sessionId,
-        version: result.snapshot.version,
-        outboxEventId: result.outboxEvent.id,
-        idempotentReplay: Boolean(result.idempotentReplay),
-      },
-      'manifest accepted',
-    );
-
     res.status(200).json({
       ok: true,
-      sessionId,
-      version: result.snapshot.version,
-      outboxEventId: result.outboxEvent.id,
-      idempotentReplay: Boolean(result.idempotentReplay),
+      service: 'visual-engine-tui',
+      store: config?.storeMode ?? 'memory',
     });
   });
 
-  app.get('/api/dashboard/:sessionId', async (req: Request, res: Response) => {
-    const dash = await deps.store.getDashboard(req.params.sessionId);
-    if (!dash) {
-      res.status(404).json({ error: 'not_found' });
-      return;
+  app.get('/ready', async (_req, res) => {
+    try {
+      const ok = deps.isReady ? await deps.isReady() : true;
+      if (!ok) {
+        res.status(503).json({ ok: false, ready: false });
+        return;
+      }
+      res.status(200).json({
+        ok: true,
+        ready: true,
+        store: config?.storeMode ?? 'memory',
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error({ err: message }, 'readiness check failed');
+      res.status(503).json({ ok: false, ready: false, error: message });
     }
-    res.status(200).json(dash);
   });
 
-  app.post('/api/widget-interaction', async (req: Request, res: Response) => {
-    const body = req.body as Partial<WidgetInteractionEvent>;
-    if (
-      body?.type !== 'widget_interaction' ||
-      typeof body.taskId !== 'string' ||
-      typeof body.widgetId !== 'string' ||
-      typeof body.action !== 'string' ||
-      typeof body.timestamp !== 'string' ||
-      typeof body.payload !== 'object' ||
-      body.payload === null
-    ) {
-      res.status(400).json({ errors: ['invalid widget_interaction event'] });
-      return;
-    }
-    await deps.store.recordInteraction(body as WidgetInteractionEvent);
-    res.status(202).json({ ok: true });
-  });
+  app.use('/api/v1/tui', createTuiRouter({ store: deps.tuiStore, logger: log }));
 
   return app;
 }

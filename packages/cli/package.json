@@ -1,17 +1,18 @@
 {
   "name": "@visual-engine/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "bin": {
-    "visual-agent": "./src/cli.ts"
+    "visual-agent": "./bin/visual-agent.mjs",
+    "vae-agent": "./bin/visual-agent.mjs"
   },
   "scripts": {
-    "test": "vitest run",
-    "start": "tsx src/cli.ts"
+    "start": "tsx src/cli.ts",
+    "test": "vitest run"
   },
   "dependencies": {
-    "@visual-engine/shared": "*",
+    "@visual-engine/tui-shared": "*",
     "tsx": "^4.19.3"
   },
   "devDependencies": {

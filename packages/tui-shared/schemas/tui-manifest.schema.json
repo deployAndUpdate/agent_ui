@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TuiManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique task session identifier"
+    },
+    "operation": {
+      "type": "string",
+      "enum": ["SYNC_DASHBOARD", "ADD_WIDGET", "UPDATE_WIDGET", "REMOVE_WIDGET"],
+      "description": "Layout mutation operation"
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": ["vertical", "horizontal"],
+          "default": "vertical"
+        },
+        "chunks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "widgetId": { "type": "string", "minLength": 1 },
+              "type": {
+                "type": "string",
+                "enum": ["Paragraph", "Table", "List", "Gauge", "Chart"]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Chunk weight / row height hint for the terminal grid"
+              },
+              "props": {
+                "type": "object",
+                "description": "Widget-specific props validated per type"
+              }
+            },
+            "required": ["widgetId", "type", "size", "props"]
+          }
+        }
+      },
+      "required": ["chunks"]
+    }
+  },
+  "required": ["taskId", "operation", "layout"]
+}
