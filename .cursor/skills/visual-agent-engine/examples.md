@@ -57,10 +57,74 @@
 }
 ```
 
-Submit:
+Submit **both** tracks (same session / taskId):
 
 ```bash
 npm run agent -- submit --session demo --version 1 --file /tmp/vae-manifest.json
+
+curl -s http://127.0.0.1:3001/api/v1/tui/manifest \
+  -H 'content-type: application/json' \
+  -d "{\"sessionId\":\"demo\",\"manifest\":$(cat /tmp/vae-manifest.tui.json)}"
+```
+
+## Matching TUI SYNC (same data)
+
+```json
+{
+  "taskId": "req_sales_overview",
+  "operation": "SYNC_DASHBOARD",
+  "layout": {
+    "direction": "vertical",
+    "chunks": [
+      {
+        "widgetId": "w_header",
+        "type": "Paragraph",
+        "size": 2,
+        "props": {
+          "title": "Sales overview",
+          "text": "Revenue 12500 USD · Active users 842",
+          "style": "cyan"
+        }
+      },
+      {
+        "widgetId": "w_gauge",
+        "type": "Gauge",
+        "size": 1,
+        "props": { "title": "Pipeline", "ratio": 0.72, "label": "72%" }
+      },
+      {
+        "widgetId": "w_table",
+        "type": "Table",
+        "size": 8,
+        "props": {
+          "headers": ["id", "name", "amount"],
+          "rows": [
+            ["1", "Acme", "1200"],
+            ["2", "Globex", "900"]
+          ]
+        }
+      },
+      {
+        "widgetId": "w_log",
+        "type": "List",
+        "size": 4,
+        "props": {
+          "title": "Log",
+          "items": ["Dashboard synced", "Imported CRM rows"]
+        }
+      },
+      {
+        "widgetId": "w_trend",
+        "type": "Chart",
+        "size": 6,
+        "props": {
+          "title": "Weekly sales",
+          "datasets": [{ "name": "sales", "data": [12, 18, 15, 22, 28, 25, 30] }]
+        }
+      }
+    ]
+  }
+}
 ```
 
 ## Add one widget
@@ -129,6 +193,8 @@ npm run agent -- submit --session demo --version 2 --file /tmp/vae-add.json
 User: «Собери дашборд продаж для сессии demo»
 
 1. GET `/api/dashboard/demo` (or assume v1 if 404)
-2. Write SYNC manifest with metrics + chart + table
-3. `npm run agent -- submit --session demo --version 1 --file ...`
-4. Reply with `http://localhost:5173/?sessionId=demo`
+2. Write web SYNC manifest (metrics + chart + table)
+3. Write TUI SYNC manifest with the same facts (Paragraph/Table/List/Chart)
+4. `npm run agent -- submit --session demo --version 1 --file .vae/manifest.web.json`
+5. `curl …/api/v1/tui/manifest` with `.vae/manifest.tui.json`
+6. Reply with web URL **and** remind that `npm run dev:tui` should show the board

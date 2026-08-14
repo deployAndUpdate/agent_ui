@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ParagraphProps",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "title": { "type": "string" },
+    "text": { "type": "string" },
+    "style": {
+      "type": "string",
+      "enum": ["default", "cyan", "green", "yellow", "red", "magenta", "blue", "white"]
+    }
+  },
+  "required": ["text"]
+}

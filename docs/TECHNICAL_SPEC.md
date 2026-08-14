@@ -2,9 +2,18 @@
 
 ## 1. Общие сведения и назначение
 
-Система **Visual Agent Engine** предназначена для автономного создания, рендеринга и управления пользовательскими интерфейсами (дашбордами, формами, виджетами) со стороны ИИ-агента (работающего через CLI/скиллы).
+Система **Visual Agent Engine** предназначена для автономного создания, рендеринга и управления пользовательскими интерфейсами со стороны ИИ-агента (CLI/скиллы).
 
 Пайплайн исключает генерацию «сырого» HTML/JS, используя подход **Server-Driven UI (SDUI)** с жёстким детерминированным набором компонентов (**Component Registry**) и петлёй самоисправления (**Self-Healing Loop**).
+
+Поддерживаются **два параллельных трека** клиентов:
+
+| Трек | Манифест | Транспорт | Клиент |
+|------|----------|-----------|--------|
+| **Web** | `DashboardManifest` (MetricCard, …) | `POST /api/manifest`, `WS /ws` | React (`frontend/`) |
+| **TUI** | `TuiManifest` (Paragraph, Table, …) | `POST /api/v1/tui/manifest`, `WS /api/v1/tui/stream` | Rust stub → Ratatui (`tui/`) |
+
+Треки не разделяют схемы, store и outbox. Веб можно удалить без правок TUI-ядра (см. [goals/07-tui-ratatui.md](./goals/07-tui-ratatui.md)).
 
 ## 2. Архитектура пайплайна (End-to-End Flow)
 
@@ -18,21 +27,23 @@
                          │                                   │
                   [Agent Retry]                      [WebSocket Stream]
                                                              │
-                                                  [Frontend Visual Engine]
-                                                             │
-                                                   (Framer Motion Layout)
+                                      ┌──────────────────────┴──────────────────────┐
+                                      ▼                                             ▼
+                               [React / Scene Graph]                      [TUI RENDER_MANIFEST]
+                                      │                                             │
+                               [frontend]                                    [tui/ stub → Ratatui]
 ```
 
 | Этап | Описание |
 |------|----------|
-| **Генерация** | Агент обрабатывает запрос, собирает данные и формирует JSON-манифест по схеме |
-| **Валидация (Gatekeeper)** | Бэкенд проверяет манифест через AJV (JSON Schema). При ошибке — HTTP 400; агент корректирует структуру (Self-Healing) |
-| **Доставка** | Событие пишется в `outbox_events`; консюмер пушит манифест клиенту по WebSocket |
-| **Рендеринг** | Фронтенд сопоставляет типы с реестром и перестраивает UI (Framer Motion) |
+| **Генерация** | Агент собирает данные и формирует JSON-манифест по схеме выбранного трека |
+| **Валидация (Gatekeeper)** | Бэкенд проверяет манифест через AJV. При ошибке — HTTP 400; агент корректирует структуру |
+| **Доставка** | Событие пишется в outbox трека; консюмер пушит клиенту по WebSocket |
+| **Рендеринг** | Web: `manifestToScene` → React. TUI: chunks → terminal widgets (Ratatui) |
 
-## 3. Контракт данных (JSON Schema DTO)
+## 3. Контракт данных — Web (JSON Schema DTO)
 
-Строгий контракт, который обязан возвращать агент. Канонический файл схемы: `packages/shared/schemas/dashboard-manifest.schema.json`.
+Строгий контракт веб-трека. Канонический файл: `packages/shared/schemas/dashboard-manifest.schema.json`.
 
 ```json
 {
@@ -86,7 +97,7 @@
 }
 ```
 
-### Событие взаимодействия виджета (client → backend)
+### Событие взаимодействия виджета (web client → backend)
 
 ```json
 {
@@ -99,33 +110,101 @@
 }
 ```
 
-## 4. Фронтенд-движок (Visual Engine)
+## 3b. Контракт данных — TUI (параллельный)
 
-- **Контейнер**: React, маппинг манифеста → 12-колоночная сетка (Tailwind CSS).
-- **Реестр**: `MetricCard`, `DataChart`, `ActionLog`, `DataTable`.
-- **Анимации**: Framer Motion (`layout`) для снижения CLS при resize/remove.
-- **Обратная связь**: клики/формы/экспорт → стандартизированное событие на бэкенд.
+Каноническая схема: `packages/tui-shared/schemas/tui-manifest.schema.json`.
+
+Допустимые типы: `Paragraph`, `Table`, `List`, `Gauge`, `Chart`. Layout — `direction` + `chunks[]` с числовым `size` (вес/высота чанка).
+
+```json
+{
+  "taskId": "task_7749",
+  "operation": "SYNC_DASHBOARD",
+  "layout": {
+    "direction": "vertical",
+    "chunks": [
+      {
+        "widgetId": "w_header",
+        "type": "Paragraph",
+        "size": 3,
+        "props": {
+          "title": "Agent Execution Panel",
+          "text": "Status: Searching local files...",
+          "style": "cyan"
+        }
+      },
+      {
+        "widgetId": "w_results",
+        "type": "Table",
+        "size": 12,
+        "props": {
+          "headers": ["File", "Lines", "Match Score"],
+          "rows": [
+            ["src/main.rs", "142", "0.98"],
+            ["src/engine.rs", "85", "0.91"]
+          ]
+        }
+      }
+    ]
+  }
+}
+```
+
+### WebSocket события TUI
+
+Backend → client:
+
+```json
+{ "event": "RENDER_MANIFEST", "payload": { /* TuiManifest */ } }
+```
+
+Client → backend:
+
+```json
+{
+  "event": "USER_ACTION",
+  "taskId": "task_7749",
+  "widgetId": "w_results",
+  "action": "select_row",
+  "payload": { "rowIndex": 0, "rowData": ["src/main.rs", "142", "0.98"] }
+}
+```
+
+## 4. Presentation layer (Web Scene Graph)
+
+- **Scene**: `packages/shared` — `manifestToScene(manifest)` → `DashboardScene` (nodes, 12-col grid, traits).
+- **RendererPort**: контракт веб-адаптера (`react`).
+- **React adapter**: `frontend` — Scene → DOM.
+- **Реестр типов (web)**: `MetricCard`, `DataChart`, `ActionLog`, `DataTable`.
+- **TUI**: отдельный реестр в `@visual-engine/tui-shared`; stub в `tui/` печатает манифест (полный Ratatui — позже).
 
 ## 5. Инфраструктура и состояние
 
-| Паттерн | Требование |
-|---------|------------|
-| **Transactional Outbox** | Манифест и бизнес-транзакция пишутся в БД (PostgreSQL / in-memory store в тестах) атомарно в `outbox_events` |
-| **Persisted Dashboards** | Таблица `dashboards`: последний успешный JSON-снимок по `session_id`. `GET /api/dashboard/{session_id}` |
-| **Optimistic Locking** | Консюмер сверяет инкрементальный `version` / `timestamp`, чтобы устаревший ответ агента не перезаписал свежий |
+| Паттерн | Web | TUI |
+|---------|-----|-----|
+| **Transactional Outbox** | `outbox_events` | `tui_outbox` (`pending` → `sent`) |
+| **Persisted State** | `dashboards` | `tui_sessions.last_manifest` |
+| **Optimistic Locking** | `version` на submit | last-write-wins (без version) |
+| **Interactions** | `POST /api/widget-interaction` | WS `USER_ACTION` / `POST /api/v1/tui/action` |
 
-### HTTP API (минимальный контракт)
+### HTTP / WS (минимальный контракт)
 
-| Метод | Путь | Описание |
-|-------|------|----------|
-| `POST` | `/api/manifest` | Приём манифеста от агента; валидация AJV; 400 / outbox |
-| `GET` | `/api/dashboard/:sessionId` | Актуальный снимок борды |
-| `POST` | `/api/widget-interaction` | События от виджетов |
-| `WS` | `/ws?sessionId=` | Realtime-поток обновлений манифеста |
+| Метод | Путь | Трек | Описание |
+|-------|------|------|----------|
+| `POST` | `/api/manifest` | Web | Приём манифеста; AJV; 400 / outbox |
+| `GET` | `/api/dashboard/:sessionId` | Web | Актуальный снимок борды |
+| `POST` | `/api/widget-interaction` | Web | События от виджетов |
+| `WS` | `/ws?sessionId=` | Web | Realtime `dashboard_update` |
+| `POST` | `/api/v1/tui/manifest` | TUI | Приём TUI-манифеста; AJV; 400 / outbox |
+| `GET` | `/api/v1/tui/session/:sessionId` | TUI | Последний снимок |
+| `POST` | `/api/v1/tui/action` | TUI | HTTP-fallback `USER_ACTION` |
+| `WS` | `/api/v1/tui/stream?sessionId=` | TUI | `RENDER_MANIFEST` / `USER_ACTION` |
+
+Порт по умолчанию: `3001` (`PORT` env).
 
 ## 6. Self-Healing Loop
 
-1. Агент отправляет манифест.
+1. Агент отправляет манифест выбранного трека.
 2. Gatekeeper возвращает 400 + AJV-ошибки.
-3. Агент (или mock-слой в тестах) корректирует JSON и повторяет запрос.
-4. Успех → outbox → WebSocket → UI.
+3. Агент корректирует JSON и повторяет запрос.
+4. Успех → outbox трека → WebSocket → UI.

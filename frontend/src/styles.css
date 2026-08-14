@@ -1,20 +1,20 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "IBM Plex Sans", "Segoe UI", sans-serif;
-  --font-display: "IBM Plex Serif", Georgia, serif;
-  --color-ink: #e7ecf3;
-  --color-panel: #1a222c;
-  --color-accent: #3d9a7a;
-  --color-bg: #0f1419;
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Inter", "Segoe UI", system-ui, sans-serif;
+  --color-ink: #e2e8f0;
+  --color-panel: rgba(15, 23, 42, 0.72);
+  --color-accent: #22d3ee;
+  --color-bg: #050821;
 }
 
 @layer base {
   :root {
     color: var(--color-ink);
     background:
-      radial-gradient(1200px 600px at 10% -10%, #1b3a32 0%, transparent 55%),
-      radial-gradient(900px 500px at 100% 0%, #243044 0%, transparent 50%),
+      radial-gradient(ellipse 80% 50% at 20% -10%, rgba(6, 182, 212, 0.14) 0%, transparent 50%),
+      radial-gradient(ellipse 60% 40% at 90% 10%, rgba(59, 130, 246, 0.1) 0%, transparent 45%),
       var(--color-bg);
     min-height: 100vh;
     font-family: var(--font-sans);
@@ -26,5 +26,19 @@
 
   .font-display {
     font-family: var(--font-display);
+  }
+}
+
+@layer components {
+  .vision-card {
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.75) 0%, rgba(30, 41, 59, 0.55) 100%);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  }
+
+  .vision-card-hero {
+    padding: 0;
+    overflow: hidden;
   }
 }

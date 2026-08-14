@@ -1,5 +1,11 @@
 import { motion } from 'framer-motion';
-import type { DashboardManifest, WidgetInteractionEvent, WidgetType } from '@visual-engine/shared';
+import {
+  manifestToScene,
+  type DashboardManifest,
+  type SceneNode,
+  type WidgetInteractionEvent,
+  type WidgetType,
+} from '@visual-engine/shared';
 import { componentRegistry } from './registry';
 
 export interface VisualEngineProps {
@@ -30,42 +36,66 @@ const colSpan: Record<number, string> = {
   12: 'col-span-12',
 };
 
-export function VisualEngine({ manifest, onInteraction }: VisualEngineProps) {
-  return (
-    <div className="grid grid-cols-12 gap-4" data-testid="visual-engine">
-      {manifest.layout.widgets.map((widget) => {
-        const Component = componentRegistry[widget.type as WidgetType];
-        const span = colSpan[widget.size.w] ?? 'col-span-12';
+function SceneNodeView({
+  node,
+  taskId,
+  onInteraction,
+}: {
+  node: SceneNode;
+  taskId: string;
+  onInteraction: (event: WidgetInteractionEvent) => void;
+}) {
+  const Component = componentRegistry[node.type as WidgetType];
+  const span = colSpan[node.colSpan] ?? 'col-span-12';
 
-        return (
-          <motion.div
-            key={widget.widgetId}
-            layout
-            className={`${span} rounded-xl border border-white/10 bg-[color:var(--color-panel)]/90 p-4`}
-            style={{ minHeight: `${widget.size.h * 4}rem` }}
-            data-widget-id={widget.widgetId}
-          >
-            {Component ? (
-              <Component
-                widgetId={widget.widgetId}
-                props={widget.props}
-                onAction={(action, payload = {}) => {
-                  onInteraction({
-                    type: 'widget_interaction',
-                    taskId: manifest.taskId,
-                    widgetId: widget.widgetId,
-                    action,
-                    payload,
-                    timestamp: new Date().toISOString(),
-                  });
-                }}
-              />
-            ) : (
-              <UnsupportedWidget type={String(widget.type)} />
-            )}
-          </motion.div>
-        );
-      })}
+  return (
+    <motion.div
+      key={node.widgetId}
+      layout
+      className={`${span} vision-card rounded-2xl p-4 ${node.traits.hero ? 'vision-card-hero' : ''}`}
+      style={{ minHeight: `${node.minHeightUnits}rem` }}
+      data-widget-id={node.widgetId}
+    >
+      {Component ? (
+        <Component
+          widgetId={node.widgetId}
+          props={node.props}
+          onAction={(action, payload = {}) => {
+            onInteraction({
+              type: 'widget_interaction',
+              taskId,
+              widgetId: node.widgetId,
+              action,
+              payload,
+              timestamp: new Date().toISOString(),
+            });
+          }}
+        />
+      ) : (
+        <UnsupportedWidget type={String(node.type)} />
+      )}
+    </motion.div>
+  );
+}
+
+/** React adapter of RendererPort: Manifest → Scene → DOM widgets. */
+export function VisualEngine({ manifest, onInteraction }: VisualEngineProps) {
+  const scene = manifestToScene(manifest);
+
+  return (
+    <div
+      className="grid grid-cols-12 gap-4"
+      data-testid="visual-engine"
+      data-scene-schema={scene.schemaVersion}
+    >
+      {scene.nodes.map((node) => (
+        <SceneNodeView
+          key={node.widgetId}
+          node={node}
+          taskId={scene.taskId}
+          onInteraction={onInteraction}
+        />
+      ))}
     </div>
   );
 }

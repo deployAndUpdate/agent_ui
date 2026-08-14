@@ -1,6 +1,8 @@
 # Visual Agent Engine
 
-Server-Driven UI: агент → JSON Manifest → AJV Gatekeeper → Transactional Outbox → WebSocket → React Visual Engine.
+Server-Driven UI: агент → JSON Manifest → AJV Gatekeeper → Transactional Outbox → WebSocket → клиенты (React web | TUI stub).
+
+Два **параллельных** трека: веб (`/api/manifest`, `/ws`) и TUI (`/api/v1/tui/*`, `/api/v1/tui/stream`). Общей бизнес-логики между ними нет — веб можно выпилить без правок TUI-ядра.
 
 ## Документация
 
@@ -9,23 +11,34 @@ Server-Driven UI: агент → JSON Manifest → AJV Gatekeeper → Transactio
 - [Пирамида тестирования](docs/TESTING_PYRAMID.md)
 - [Roadmap 1–13](docs/ROADMAP_1_13.md)
 - [Цели](docs/goals/)
+- [TUI / Ratatui track](docs/goals/07-tui-ratatui.md)
 
 ## Быстрый старт (локально, in-memory)
 
 ```bash
 npm install
 npm test
-npm run test:e2e -w frontend   # Playwright
 
+./app-run front      # backend + web UI  → http://localhost:5173/?sessionId=demo
+./app-run stop
+```
+
+Или по отдельности:
+
+```bash
 # терминал 1
 npm run dev:backend
 
-# терминал 2
+# терминал 2 — веб
 npm run dev:frontend
 # http://localhost:5173/?sessionId=demo
+
+# терминал 2 — TUI (Ratatui)
+npm run dev:tui
+# TUI_WS_URL=ws://127.0.0.1:3001/api/v1/tui/stream?sessionId=demo
 ```
 
-Отправить манифест:
+### Веб-манифест
 
 ```bash
 curl -s http://127.0.0.1:3001/api/manifest -H 'content-type: application/json' -d '{
@@ -41,7 +54,22 @@ curl -s http://127.0.0.1:3001/api/manifest -H 'content-type: application/json' -
 }'
 ```
 
-CLI Self-Healing агент:
+### TUI-манифест
+
+```bash
+curl -s http://127.0.0.1:3001/api/v1/tui/manifest -H 'content-type: application/json' -d '{
+  "sessionId":"demo",
+  "manifest":{
+    "taskId":"task_7749","operation":"SYNC_DASHBOARD",
+    "layout":{"direction":"vertical","chunks":[{
+      "widgetId":"w_header","type":"Paragraph","size":3,
+      "props":{"title":"Hello","text":"TUI track","style":"cyan"}
+    }]}
+  }
+}'
+```
+
+CLI Self-Healing агент (веб-трек):
 
 ```bash
 npm run agent -- submit --session demo --version 2 --file backend/tests/fixtures/manifest.invalid.json
@@ -61,13 +89,13 @@ API_KEYS=dev-key docker compose up --build
 
 Агент сам подхватит skill при запросах про дашборд / виджеты / SDUI. Явно: «используй skill visual-agent-engine».
 
-Лично для всех проектов можно скопировать папку в `~/.cursor/skills/visual-agent-engine/`.
-
 ## Пакеты
 
 | Пакет | Назначение |
 |-------|------------|
-| `@visual-engine/shared` | Schema, props schemas, AJV, applyLayoutOperation |
-| `@visual-engine/cli` | CLI submit + Self-Healing |
-| `backend` | API, Outbox, WS, Postgres/memory, auth |
-| `frontend` | VisualEngine + live session hook |
+| `@visual-engine/shared` | Web schema, Scene Graph, RendererPort, AJV |
+| `@visual-engine/tui-shared` | TUI schema (Paragraph/Table/…), AJV |
+| `@visual-engine/cli` | CLI submit + Self-Healing (веб) |
+| `backend` | Web + TUI API, Outbox, WS, Postgres/memory |
+| `frontend` | React adapter (Scene → DOM) |
+| `tui/` | Ratatui TUI browser (Paragraph/Table/List/Gauge/Chart) |

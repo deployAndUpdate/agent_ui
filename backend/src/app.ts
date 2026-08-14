@@ -5,9 +5,13 @@ import type { DashboardStore } from './store/types.js';
 import type { AppConfig } from './config.js';
 import { createAuthMiddleware, createRateLimitMiddleware } from './middleware/security.js';
 import { createLogger, type Logger } from './logging/logger.js';
+import type { TuiStore } from './tui/store/types.js';
+import { createTuiRouter } from './tui/routes.js';
 
 export interface AppDeps {
   store: DashboardStore;
+  /** Parallel TUI track — optional so web-only tests stay unchanged. */
+  tuiStore?: TuiStore;
   config?: AppConfig;
   logger?: Logger;
 }
@@ -112,6 +116,10 @@ export function createApp(deps: AppDeps): Express {
     await deps.store.recordInteraction(body as WidgetInteractionEvent);
     res.status(202).json({ ok: true });
   });
+
+  if (deps.tuiStore) {
+    app.use('/api/v1/tui', createTuiRouter({ store: deps.tuiStore, logger: log }));
+  }
 
   return app;
 }

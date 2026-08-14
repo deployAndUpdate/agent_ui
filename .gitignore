@@ -10,3 +10,6 @@ test-results/
 playwright-report/
 playwright/.cache/
 .vae/
+.app-run/
+tui/target/
+

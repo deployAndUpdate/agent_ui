@@ -9,12 +9,17 @@
   "scripts": {
     "test": "npm run test --workspaces --if-present",
     "test:shared": "npm test -w @visual-engine/shared",
+    "test:tui-shared": "npm test -w @visual-engine/tui-shared",
     "test:backend": "npm test -w backend",
     "test:frontend": "npm test -w frontend",
     "test:cli": "npm test -w @visual-engine/cli",
     "test:e2e": "npm run test:e2e -w frontend",
     "dev:backend": "npm run dev -w backend",
     "dev:frontend": "npm run dev -w frontend",
+    "dev:tui": "cargo run --manifest-path tui/Cargo.toml",
+    "dev:tui-stub": "cargo run --manifest-path tui/Cargo.toml",
+    "app:front": "bash ./app-run front",
+    "app:stop": "bash ./app-run stop",
     "agent": "npm run start -w @visual-engine/cli --",
     "build": "npm run build --workspaces --if-present"
   },

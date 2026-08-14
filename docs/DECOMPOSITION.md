@@ -11,6 +11,7 @@
 | 4 | WebSocket Stream | [goals/04-websocket.md](./goals/04-websocket.md) | Integration | ✅ |
 | 5 | Frontend Visual Engine | [goals/05-frontend-engine.md](./goals/05-frontend-engine.md) | Unit / Component | ✅ |
 | 6 | E2E Pipeline | [goals/06-e2e-pipeline.md](./goals/06-e2e-pipeline.md) | E2E | ✅ |
+| 7 | TUI track (Ratatui backend + stub) | [goals/07-tui-ratatui.md](./goals/07-tui-ratatui.md) | Unit / Integration | ✅ |
 
 ## Структура репозитория
 
@@ -18,7 +19,11 @@
 visual_engine/
 ├── docs/                  # спека, декомпозиция, цели
 ├── packages/
-│   └── shared/            # JSON Schema, общие типы
-├── backend/               # Gatekeeper, Outbox, API, WS
-└── frontend/              # Visual Engine (React + Framer Motion)
+│   ├── shared/            # Web JSON Schema, Scene Graph, RendererPort
+│   ├── tui-shared/        # TUI JSON Schema + AJV (параллельный контракт)
+│   └── cli/
+├── backend/               # Web + TUI Gatekeeper, Outbox, API, WS
+│   └── src/tui/           # изолированный TUI-слой
+├── frontend/              # React Scene adapter (web track)
+└── tui/                   # Rust WS stub → будущий Ratatui client
 ```
