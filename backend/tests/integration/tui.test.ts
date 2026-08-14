@@ -93,7 +93,10 @@ describe('TUI API (integration)', () => {
     expect(tuiStore.listActions('tui_sess')).toHaveLength(1);
 
     const snap = await tuiStore.getSession('tui_sess');
-    expect(snap?.manifest.taskId).toMatch(/^detail_w_results_/);
+    expect(snap?.manifest.taskId).toBe('task_7749');
+
+    const pending = await tuiStore.listPendingOutbox();
+    expect(pending.some((e) => e.payload.taskId.startsWith('detail_w_results_'))).toBe(true);
   });
 });
 

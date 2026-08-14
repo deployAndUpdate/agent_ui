@@ -44,8 +44,9 @@ impl UserAction {
 }
 
 /// Apply incoming manifest under current nav mode.
-pub fn on_manifest_received(mode: &mut crate::nav::NavMode, _manifest: &TuiManifest) {
+pub fn on_manifest_received(mode: &mut crate::nav::NavMode, manifest: &TuiManifest) {
     use crate::nav::NavMode;
+    let is_detail = manifest.task_id.starts_with("detail_");
     match mode {
         NavMode::AwaitDetail { widget_id, .. } => {
             *mode = NavMode::DetailScreen {
@@ -55,8 +56,22 @@ pub fn on_manifest_received(mode: &mut crate::nav::NavMode, _manifest: &TuiManif
         NavMode::AwaitBoard { .. } => {
             *mode = NavMode::Browse;
         }
-        NavMode::DetailScreen { .. } => {}
-        NavMode::Idle | NavMode::Browse | NavMode::TableInteract { .. } => {}
+        NavMode::DetailScreen { .. } => {
+            // Agent SYNC / navigate_back restored the root board.
+            if !is_detail {
+                *mode = NavMode::Browse;
+            }
+        }
+        NavMode::Idle | NavMode::Browse | NavMode::TableInteract { .. } => {
+            // Ephemeral detail over WS (session root stays the board).
+            if is_detail {
+                let from_widget = match mode {
+                    NavMode::TableInteract { widget_id, .. } => widget_id.clone(),
+                    _ => String::new(),
+                };
+                *mode = NavMode::DetailScreen { from_widget };
+            }
+        }
     }
 }
 
@@ -95,6 +110,29 @@ mod tests {
     #[test]
     fn await_board_becomes_browse() {
         let mut mode = NavMode::AwaitBoard {
+            from_widget: "w_table".into(),
+        };
+        on_manifest_received(&mut mode, &dummy_manifest());
+        assert_eq!(mode, NavMode::Browse);
+    }
+
+    #[test]
+    fn detail_overlay_enters_detail_from_idle() {
+        let mut mode = NavMode::Idle;
+        let mut m = dummy_manifest();
+        m.task_id = "detail_w_results_0".into();
+        on_manifest_received(&mut mode, &m);
+        assert_eq!(
+            mode,
+            NavMode::DetailScreen {
+                from_widget: String::new()
+            }
+        );
+    }
+
+    #[test]
+    fn board_while_on_detail_returns_to_browse() {
+        let mut mode = NavMode::DetailScreen {
             from_widget: "w_table".into(),
         };
         on_manifest_received(&mut mode, &dummy_manifest());

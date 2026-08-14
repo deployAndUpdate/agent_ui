@@ -1,11 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import type { TuiManifest, TuiUserAction } from '@visual-engine/tui-shared';
 import { InMemoryTuiStore } from '../../src/tui/store/InMemoryTuiStore.js';
-import {
-  _resetBoardStackForTests,
-  reactToUserAction,
-  rememberBoard,
-} from '../../src/tui/actions/reactToUserAction.js';
+import { reactToUserAction } from '../../src/tui/actions/reactToUserAction.js';
 import validTui from '../fixtures/tui-manifest.valid.json';
 
 const board = validTui as TuiManifest;
@@ -15,12 +11,10 @@ describe('reactToUserAction', () => {
 
   beforeEach(() => {
     store = new InMemoryTuiStore();
-    _resetBoardStackForTests();
   });
 
-  it('select_row pushes detail manifest to outbox', async () => {
+  it('select_row pushes ephemeral detail without replacing session board', async () => {
     await store.saveSessionWithOutbox({ sessionId: 's1', manifest: board });
-    rememberBoard('s1', board);
 
     const action: TuiUserAction = {
       event: 'USER_ACTION',
@@ -34,16 +28,19 @@ describe('reactToUserAction', () => {
     expect(reacted).toBe(true);
 
     const snap = await store.getSession('s1');
-    expect(snap?.manifest.taskId).toMatch(/^detail_w_results_/);
-    expect(snap?.manifest.layout.chunks.some((c) => c.widgetId === 'w_detail_body')).toBe(
+    expect(snap?.manifest.taskId).toBe(board.taskId);
+    expect(snap?.manifest.layout.chunks[1]?.widgetId).toBe('w_results');
+
+    const pending = await store.listPendingOutbox();
+    const detailEvent = pending.find((e) => e.payload.taskId.startsWith('detail_'));
+    expect(detailEvent).toBeDefined();
+    expect(detailEvent?.payload.layout.chunks.some((c) => c.widgetId === 'w_detail_body')).toBe(
       true,
     );
-    expect((await store.listPendingOutbox()).length).toBeGreaterThanOrEqual(2);
   });
 
-  it('navigate_back restores board', async () => {
+  it('navigate_back re-publishes session board', async () => {
     await store.saveSessionWithOutbox({ sessionId: 's1', manifest: board });
-    rememberBoard('s1', board);
 
     await reactToUserAction({
       sessionId: 's1',
@@ -56,6 +53,9 @@ describe('reactToUserAction', () => {
       },
       store,
     });
+
+    const beforeBack = await store.listPendingOutbox();
+    const pendingBefore = beforeBack.length;
 
     const { reacted } = await reactToUserAction({
       sessionId: 's1',
@@ -72,6 +72,9 @@ describe('reactToUserAction', () => {
 
     const snap = await store.getSession('s1');
     expect(snap?.manifest.taskId).toBe(board.taskId);
-    expect(snap?.manifest.layout.chunks[1]?.widgetId).toBe('w_results');
+
+    const pending = await store.listPendingOutbox();
+    expect(pending.length).toBe(pendingBefore + 1);
+    expect(pending[pending.length - 1]?.payload.taskId).toBe(board.taskId);
   });
 });

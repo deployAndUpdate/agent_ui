@@ -3,19 +3,6 @@ import type { TuiStore } from '../store/types.js';
 import type { Logger } from '../../logging/logger.js';
 import { createLogger } from '../../logging/logger.js';
 
-/** In-memory root board per session while a detail screen is active. */
-const boardBySession = new Map<string, TuiManifest>();
-
-export function clearBoardStack(sessionId: string): void {
-  boardBySession.delete(sessionId);
-}
-
-/** Remember the current board when an agent pushes a non-detail SYNC. */
-export function rememberBoard(sessionId: string, manifest: TuiManifest): void {
-  if (manifest.taskId.startsWith('detail_')) return;
-  boardBySession.set(sessionId, manifest);
-}
-
 function detailManifest(
   action: TuiUserAction,
   headers: string[],
@@ -90,6 +77,12 @@ export function isBuiltinReactorEnabled(): boolean {
   return v !== 'off' && v !== '0' && v !== 'false';
 }
 
+/**
+ * Built-in action reactor (option C):
+ * - Session snapshot always stays the root board (agent SYNC).
+ * - Detail is ephemeral: outbox/WS only, never persisted as session.
+ * - navigate_back re-publishes the session board.
+ */
 export async function reactToUserAction(opts: {
   sessionId: string;
   action: TuiUserAction;
@@ -123,61 +116,28 @@ export async function reactToUserAction(opts: {
       log.warn({ sessionId, widgetId: action.widgetId }, 'select_row: row not found');
       return { reacted: false };
     } else {
-      // headers unknown — synthesize Field N
       headers = row.map((_, i) => `Field ${i + 1}`);
     }
 
-    // Preserve root board (first detail push wins until navigate_back)
-    if (!boardBySession.has(sessionId) && !snap.manifest.taskId.startsWith('detail_')) {
-      boardBySession.set(sessionId, snap.manifest);
-    } else if (!boardBySession.has(sessionId)) {
-      // already on detail without board — cannot recover meaningfully
-      boardBySession.set(sessionId, snap.manifest);
-    }
-
     const detail = detailManifest(action, headers, row);
-    const result = await store.saveSessionWithOutbox({
-      sessionId,
-      manifest: detail,
-      idempotencyKey: `detail:${sessionId}:${action.widgetId}:${rowIndex}:${Date.now()}`,
-    });
-    if (!result.ok) {
-      log.warn({ sessionId, reason: result.reason }, 'select_row: save failed');
-      return { reacted: false };
-    }
+    await store.enqueueOutbox(sessionId, detail);
     log.info(
       { sessionId, widgetId: action.widgetId, rowIndex, taskId: detail.taskId },
-      'reactor pushed detail',
+      'reactor pushed ephemeral detail',
     );
     return { reacted: true };
   }
 
   if (action.action === 'navigate_back') {
-    const board = boardBySession.get(sessionId);
-    if (!board) {
-      log.warn({ sessionId }, 'navigate_back: no board stacked');
+    const snap = await store.getSession(sessionId);
+    if (!snap) {
+      log.warn({ sessionId }, 'navigate_back: no session');
       return { reacted: false };
     }
-    boardBySession.delete(sessionId);
-    const result = await store.saveSessionWithOutbox({
-      sessionId,
-      manifest: board,
-      idempotencyKey: `back:${sessionId}:${Date.now()}`,
-    });
-    if (!result.ok) {
-      // restore stack on failure
-      boardBySession.set(sessionId, board);
-      log.warn({ sessionId, reason: result.reason }, 'navigate_back: save failed');
-      return { reacted: false };
-    }
-    log.info({ sessionId, taskId: board.taskId }, 'reactor restored board');
+    await store.enqueueOutbox(sessionId, snap.manifest);
+    log.info({ sessionId, taskId: snap.manifest.taskId }, 'reactor re-published board');
     return { reacted: true };
   }
 
   return { reacted: false };
-}
-
-/** Test helper */
-export function _resetBoardStackForTests(): void {
-  boardBySession.clear();
 }
