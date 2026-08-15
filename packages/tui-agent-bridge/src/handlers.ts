@@ -1,7 +1,20 @@
-import { buildEnrichPrompt, errorEnrichManifest, stubEnrichManifest } from './enrich.js';
+import {
+  buildEnrichPrompt,
+  buildPromptFollowUp,
+  errorEnrichManifest,
+  stubEnrichManifest,
+} from './enrich.js';
 import { postManifestCallback } from './callback.js';
-import { normalizeDetailManifest } from './parseManifest.js';
+import {
+  normalizeDetailManifest,
+  normalizePatchManifest,
+} from './parseManifest.js';
 import { SessionQueue } from './queue.js';
+import {
+  currentDetailFromBody,
+  mergeDetailChunks,
+  stubPromptPatch,
+} from './mergeChunks.js';
 import { runAgentCli } from './drivers/cli.js';
 import { SdkAgentPool } from './drivers/sdk.js';
 import { runExecDriver } from './drivers/exec.js';
@@ -9,7 +22,7 @@ import { runForwardDriver } from './drivers/forward.js';
 import type { AgentWebhookBody, BridgeConfig } from './types.js';
 import type { TuiManifest } from '@visual-engine/tui-shared';
 
-export const COMMAND_HANDLERS = ['/details'] as const;
+export const COMMAND_HANDLERS = ['/details', '/prompt'] as const;
 
 export type LlmStatus = 'n/a' | 'warming' | 'ready' | 'error';
 
@@ -72,7 +85,30 @@ export class DaemonRuntime {
       console.error(`[bridge] job failed: ${message}`);
       if (this.cfg.driver === 'forward') return;
       try {
-        await this.callback(body, errorEnrichManifest(body, message));
+        const current = currentDetailFromBody(body);
+        const errBoard = errorEnrichManifest(body, message);
+        const manifest =
+          body.command.trim() === '/prompt' && current
+            ? mergeDetailChunks(current, {
+                ...errBoard,
+                layout: {
+                  direction: 'vertical',
+                  chunks: [
+                    {
+                      widgetId: 'w_prompt_error',
+                      type: 'Paragraph',
+                      size: 5,
+                      props: {
+                        title: 'prompt error',
+                        text: message.slice(0, 2000),
+                        style: 'red',
+                      },
+                    },
+                  ],
+                },
+              })
+            : errBoard;
+        await this.callback(body, manifest);
       } catch (cbErr) {
         const cb = cbErr instanceof Error ? cbErr.message : String(cbErr);
         console.error(`[bridge] error callback failed: ${cb}`);
@@ -93,7 +129,8 @@ export class DaemonRuntime {
       );
     }
 
-    const result = await this.runDetails(body);
+    const result =
+      cmd === '/prompt' ? await this.runPrompt(body) : await this.runDetails(body);
     if (result.kind === 'peer_callback') {
       console.info(
         `[bridge] forward async — peer owns callback session=${body.sessionId} ms=${Date.now() - started}`,
@@ -122,23 +159,54 @@ export class DaemonRuntime {
       };
     }
 
-    const prompt = buildEnrichPrompt(body);
-    let text: string;
-    if (this.cfg.driver === 'exec') {
-      text = await runExecDriver(
-        { ...body, systemPrompt: body.systemPrompt || prompt },
-        this.cfg,
-      );
-    } else if (this.cfg.driver === 'sdk') {
-      if (!this.sdk) this.sdk = new SdkAgentPool(this.cfg);
-      text = await this.sdk.send(body.sessionId, prompt);
-    } else {
-      text = await runAgentCli(prompt, this.cfg);
-    }
+    const text = await this.runLlm(body, buildEnrichPrompt(body));
     return {
       kind: 'manifest',
       manifest: normalizeDetailManifest(text, body.taskId),
     };
+  }
+
+  private async runPrompt(body: AgentWebhookBody): Promise<JobResult> {
+    const current = currentDetailFromBody(body);
+    if (this.cfg.driver === 'stub' || this.llm === 'error') {
+      return {
+        kind: 'manifest',
+        manifest: mergeDetailChunks(current, stubPromptPatch(body)),
+      };
+    }
+
+    if (this.cfg.driver === 'forward') {
+      const fwd = await runForwardDriver(body, this.cfg);
+      if (fwd.asyncHandled) {
+        return { kind: 'peer_callback' };
+      }
+      const patch = normalizePatchManifest(fwd.text!, body.taskId);
+      return {
+        kind: 'manifest',
+        manifest: mergeDetailChunks(current, patch),
+      };
+    }
+
+    const text = await this.runLlm(body, buildPromptFollowUp(body));
+    const patch = normalizePatchManifest(text, body.taskId);
+    return {
+      kind: 'manifest',
+      manifest: mergeDetailChunks(current, patch),
+    };
+  }
+
+  private async runLlm(body: AgentWebhookBody, prompt: string): Promise<string> {
+    if (this.cfg.driver === 'exec') {
+      return runExecDriver(
+        { ...body, systemPrompt: body.systemPrompt || prompt },
+        this.cfg,
+      );
+    }
+    if (this.cfg.driver === 'sdk') {
+      if (!this.sdk) this.sdk = new SdkAgentPool(this.cfg);
+      return this.sdk.send(body.sessionId, prompt);
+    }
+    return runAgentCli(prompt, this.cfg);
   }
 
   private async callback(body: AgentWebhookBody, manifest: TuiManifest): Promise<void> {

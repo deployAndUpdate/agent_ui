@@ -1,4 +1,4 @@
-//! Round spinner + cycling status phrases for `/details` wait.
+//! Round spinner + cycling status phrases while `/details` or `/prompt` is in flight.
 
 pub const PHRASES: &[&str] = &[
     "fetching data",

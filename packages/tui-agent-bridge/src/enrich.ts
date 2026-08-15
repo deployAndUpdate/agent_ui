@@ -25,6 +25,35 @@ export function buildEnrichPrompt(body: AgentWebhookBody): string {
   ].join('\n');
 }
 
+export function buildPromptFollowUp(body: AgentWebhookBody): string {
+  const focused = body.payload.focusedChunk ?? null;
+  const focusedId =
+    typeof body.payload.focusedWidgetId === 'string'
+      ? body.payload.focusedWidgetId
+      : null;
+  const user =
+    (typeof body.payload.userPrompt === 'string' && body.payload.userPrompt) ||
+    body.systemPrompt ||
+    '';
+  return [
+    'Follow-up prompt on an existing TUI detail board.',
+    'Return ONLY strict JSON. Prefer a TuiManifest with ONLY new or updated layout.chunks.',
+    'Do NOT repeat unchanged widgets. Do not wrap in markdown.',
+    'Hard rules:',
+    '- operation: "SYNC_DASHBOARD"',
+    `- taskId MUST start with "detail_" (prefer "${body.taskId}")`,
+    '- chunk types ONLY: Paragraph | Table | List | Gauge | Chart',
+    '- size: unsigned integer, no plus sign (2 not +2)',
+    '- New widgetId values must be unique; reuse an id to UPDATE that widget',
+    '',
+    `userPrompt: ${user}`,
+    `focusedWidgetId: ${JSON.stringify(focusedId)}`,
+    `focusedChunk: ${JSON.stringify(focused)}`,
+    `row: ${JSON.stringify(body.payload.row ?? null)}`,
+    `sessionId: ${body.sessionId}`,
+  ].join('\n');
+}
+
 /** Deterministic enrich when no Cursor agent is available. */
 export function stubEnrichManifest(body: AgentWebhookBody): TuiManifest {
   const row = Array.isArray(body.payload.row)

@@ -46,12 +46,18 @@ export async function postAgentWebhook(opts: {
 
   const command =
     typeof opts.action.payload.command === 'string' ? opts.action.payload.command : '';
-  const systemPrompt =
-    typeof opts.action.payload.systemPrompt === 'string'
-      ? opts.action.payload.systemPrompt
-      : command === '/details'
-        ? 'more details'
+  const userPrompt =
+    typeof opts.action.payload.userPrompt === 'string'
+      ? opts.action.payload.userPrompt
+      : typeof opts.action.payload.systemPrompt === 'string'
+        ? opts.action.payload.systemPrompt
         : '';
+  const systemPrompt =
+    command === '/details'
+      ? typeof opts.action.payload.systemPrompt === 'string'
+        ? opts.action.payload.systemPrompt
+        : 'more details'
+      : userPrompt;
 
   const body: AgentWebhookPayload = {
     systemPrompt,

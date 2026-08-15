@@ -118,15 +118,16 @@ Client or HTTP `POST /api/v1/tui/action`:
 
 | action | Effect (builtin reactor) |
 |--------|---------------------------|
-| `select_row` | Push ephemeral detail board (`taskId` `detail_<widgetId>_<row>`) |
+| `select_row` | Push ephemeral detail board (`taskId` `detail_<widgetId>_<row>`); TUI auto-sends `/details` |
 | `navigate_back` | Re-publish session board |
 | `command` `/details` | POST agent webhook (`systemPrompt`: `more details`); agent SYNC enriched detail |
+| `command` `/prompt` | POST webhook with user prompt + focused widget; daemon merges chunks onto the detail board |
 
-`TUI_ACTION_REACTOR=builtin` (default) for select_row/navigate_back. Set `off` to only record those. `/details` always uses `TUI_AGENT_WEBHOOK_URL` when set.
+`TUI_ACTION_REACTOR=builtin` (default) for select_row/navigate_back. Set `off` to only record those. `/details` and `/prompt` always use `TUI_AGENT_WEBHOOK_URL` when set.
 
 For custom detail screens: listen for `select_row`, then `SYNC_DASHBOARD` with your own chunks; handle `navigate_back` the same way or leave builtin on.
 
-TUI keys (browse → table → detail → `/details`): [reference.md](reference.md#tui-navigation).
+TUI keys (browse → table → Enter → auto `/details` → Tab + `p`): [reference.md](reference.md#tui-navigation).
 
 ## Do / Don't
 
@@ -143,5 +144,5 @@ TUI keys (browse → table → detail → `/details`): [reference.md](reference.
 - Client: `tui/` (Ratatui)
 - Reactor: `backend/src/tui/actions/reactToUserAction.ts`
 - Webhook: `backend/src/tui/actions/agentWebhook.ts`
-- Daemon: `packages/tui-agent-bridge` — `./vae` starts it (`npm run bridge`); `/details` uses a warm SDK agent when `CURSOR_API_KEY` is set
+- Daemon: `packages/tui-agent-bridge` — `./vae` starts it; `/details` and `/prompt` use a warm SDK agent when `CURSOR_API_KEY` is set
 - Spec: `docs/TECHNICAL_SPEC.md`

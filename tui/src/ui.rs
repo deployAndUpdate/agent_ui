@@ -12,7 +12,7 @@ use crate::content_measure::allocated_height;
 use crate::layout_chunks::constraints_from_chunks;
 use crate::loader::{ring_lines, spinner_frame, status_phrase};
 use crate::model::{TuiChunk, TuiManifest, WsStatus};
-use crate::nav::{hover_from_viewport, table_row_count, validate_command, NavMode, PAGE_STEP};
+use crate::nav::{hover_from_viewport, should_auto_details, table_row_count, NavMode, PAGE_STEP};
 use crate::widgets_render::{render_chunk, ChunkRenderOpts};
 
 pub struct UiState {
@@ -27,8 +27,13 @@ pub struct UiState {
     pub last_body_h: u16,
     pub last_body_w: u16,
     pub detail_ctx: Option<DetailCtx>,
-    /// When `/details` was submitted; drives spinner until detail manifest arrives.
+    /// When `/details` or `/prompt` was submitted; drives spinner until detail arrives.
     pub wait_started: Option<Instant>,
+    /// One auto `/details` per row-open (not on later agent SYNC).
+    pub details_auto_sent: bool,
+    pending_auto_details: bool,
+    /// Cyan Tab-focus is armed only after Tab/[ / ] on the detail board.
+    pub detail_focus: bool,
 }
 
 impl UiState {
@@ -46,11 +51,17 @@ impl UiState {
             last_body_w: 80,
             detail_ctx: None,
             wait_started: None,
+            details_auto_sent: false,
+            pending_auto_details: false,
+            detail_focus: false,
         }
     }
 
     pub fn set_manifest(&mut self, manifest: TuiManifest) {
+        let before = self.nav.clone();
         crate::action::on_manifest_received(&mut self.nav, &manifest);
+        self.pending_auto_details =
+            should_auto_details(&before, &self.nav, self.details_auto_sent);
         let reset_view = matches!(
             self.nav,
             NavMode::Idle
@@ -71,14 +82,77 @@ impl UiState {
                 self.focus = 0;
                 self.hover = 0;
             }
+            if matches!(self.nav, NavMode::DetailScreen { .. })
+                && matches!(before, NavMode::AwaitDetail { .. } | NavMode::AwaitEnrich { .. })
+            {
+                self.focus = 0;
+                self.detail_focus = false;
+            }
         }
         if matches!(self.nav, NavMode::Browse | NavMode::Idle) {
             self.detail_ctx = None;
+            self.details_auto_sent = false;
+            self.detail_focus = false;
         }
         if !matches!(self.nav, NavMode::AwaitEnrich { .. }) {
             self.wait_started = None;
         }
         self.recompute_hover();
+    }
+
+    pub fn consume_auto_details(&mut self) -> bool {
+        let v = self.pending_auto_details;
+        self.pending_auto_details = false;
+        v
+    }
+
+    pub fn enter_await_enrich(&mut self, command: &str) {
+        let from_widget = match &self.nav {
+            NavMode::DetailScreen { from_widget }
+            | NavMode::AwaitEnrich { from_widget, .. }
+            | NavMode::PromptInsert { from_widget, .. } => from_widget.clone(),
+            NavMode::AwaitDetail { widget_id, .. } => widget_id.clone(),
+            _ => String::new(),
+        };
+        self.nav = NavMode::AwaitEnrich {
+            from_widget,
+            command: command.to_string(),
+        };
+        self.wait_started = Some(Instant::now());
+        if command == "/details" {
+            self.details_auto_sent = true;
+        }
+    }
+
+    pub fn current_detail_json(&self) -> Option<serde_json::Value> {
+        serde_json::to_value(self.manifest.as_ref()?).ok()
+    }
+
+    pub fn focused_widget_id(&self) -> Option<String> {
+        if !self.detail_focus {
+            return None;
+        }
+        let idx = self.focused_chunk_index()?;
+        self.manifest
+            .as_ref()?
+            .layout
+            .chunks
+            .get(idx)
+            .map(|c| c.widget_id.clone())
+    }
+
+    pub fn focused_chunk_json(&self) -> Option<serde_json::Value> {
+        if !self.detail_focus {
+            return None;
+        }
+        let idx = self.focused_chunk_index()?;
+        let c = self.manifest.as_ref()?.layout.chunks.get(idx)?;
+        Some(serde_json::json!({
+            "widgetId": c.widget_id,
+            "type": c.widget_type,
+            "size": c.size,
+            "props": c.props,
+        }))
     }
 
     pub fn scrollable_indices(&self) -> Vec<usize> {
@@ -123,7 +197,15 @@ impl UiState {
         if n == 0 {
             return;
         }
+        if matches!(self.nav, NavMode::DetailScreen { .. }) && !self.detail_focus {
+            self.detail_focus = true;
+            self.focus = 0;
+            return;
+        }
         self.focus = (self.focus + 1) % n;
+        if matches!(self.nav, NavMode::DetailScreen { .. }) {
+            self.detail_focus = true;
+        }
     }
 
     pub fn focus_prev(&mut self) {
@@ -131,7 +213,15 @@ impl UiState {
         if n == 0 {
             return;
         }
+        if matches!(self.nav, NavMode::DetailScreen { .. }) && !self.detail_focus {
+            self.detail_focus = true;
+            self.focus = n - 1;
+            return;
+        }
         self.focus = (self.focus + n - 1) % n;
+        if matches!(self.nav, NavMode::DetailScreen { .. }) {
+            self.detail_focus = true;
+        }
     }
 
     pub fn scroll_focused(&mut self, delta: i32) {
@@ -234,124 +324,133 @@ impl UiState {
         self.widget_scroll.insert(widget_id, scroll as u16);
     }
 
-    pub fn open_command_insert(&mut self) {
+    pub fn open_prompt_insert(&mut self) {
         let from_widget = match &self.nav {
             NavMode::DetailScreen { from_widget } => from_widget.clone(),
             _ => String::new(),
         };
-        self.nav = NavMode::CommandInsert {
+        self.nav = NavMode::PromptInsert {
             from_widget,
+            focused_widget: self.focused_widget_id(),
             buffer: String::new(),
             error: None,
         };
     }
 
-    pub fn cmd_push_char(&mut self, c: char) {
-        if let NavMode::CommandInsert { buffer, error, .. } = &mut self.nav {
+    pub fn prompt_push_char(&mut self, c: char) {
+        if let NavMode::PromptInsert { buffer, error, .. } = &mut self.nav {
             buffer.push(c);
             *error = None;
         }
     }
 
-    pub fn cmd_backspace(&mut self) {
-        if let NavMode::CommandInsert { buffer, error, .. } = &mut self.nav {
+    pub fn prompt_backspace(&mut self) {
+        if let NavMode::PromptInsert { buffer, error, .. } = &mut self.nav {
             buffer.pop();
             *error = None;
         }
     }
 
-    pub fn cmd_cancel(&mut self) {
-        if let NavMode::CommandInsert { from_widget, .. } = &self.nav {
+    pub fn prompt_cancel(&mut self) {
+        if let NavMode::PromptInsert { from_widget, .. } = &self.nav {
             let from_widget = from_widget.clone();
             self.nav = NavMode::DetailScreen { from_widget };
         }
     }
 
-    pub fn cmd_try_submit(&mut self) -> Result<(String, String), ()> {
-        let NavMode::CommandInsert {
-            from_widget,
-            buffer,
-            ..
-        } = &self.nav
-        else {
+    pub fn prompt_try_submit(&mut self) -> Result<String, ()> {
+        let NavMode::PromptInsert { buffer, .. } = &self.nav else {
             return Err(());
         };
-        let from_widget = from_widget.clone();
-        let buffer = buffer.clone();
-        match validate_command(&buffer) {
-            Ok(cmd) => {
-                self.nav = NavMode::AwaitEnrich {
-                    from_widget: from_widget.clone(),
-                    command: cmd.clone(),
-                };
-                self.wait_started = Some(Instant::now());
-                Ok((from_widget, cmd))
+        let text = buffer.trim().to_string();
+        if text.is_empty() {
+            if let NavMode::PromptInsert { error, .. } = &mut self.nav {
+                *error = Some("empty prompt".into());
             }
-            Err(msg) => {
-                if let NavMode::CommandInsert { error, .. } = &mut self.nav {
-                    *error = Some(msg);
-                }
-                Err(())
-            }
+            return Err(());
         }
+        Ok(text)
     }
 }
 
 pub fn draw(frame: &mut Frame, state: &UiState) {
     let area = frame.area();
-    let show_cmd = matches!(state.nav, NavMode::CommandInsert { .. });
-    let constraints = if show_cmd {
-        vec![
-            Constraint::Min(3),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ]
-    } else {
-        vec![Constraint::Min(3), Constraint::Length(1)]
-    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(constraints)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
 
     draw_body(frame, chunks[0], state);
     if matches!(state.nav, NavMode::AwaitEnrich { .. }) {
         draw_enrich_overlay(frame, chunks[0], state);
     }
-    if show_cmd {
-        draw_cmdline(frame, chunks[1], state);
-        draw_status(frame, chunks[2], state);
-    } else {
-        draw_status(frame, chunks[1], state);
+    if matches!(state.nav, NavMode::PromptInsert { .. }) {
+        draw_prompt_overlay(frame, chunks[0], state);
     }
+    draw_status(frame, chunks[1], state);
 }
 
-fn draw_cmdline(frame: &mut Frame, area: Rect, state: &UiState) {
-    let buf = state.nav.command_buffer().unwrap_or("");
-    let err = state.nav.command_error();
-    let line = if let Some(e) = err {
-        Line::from(vec![
-            Span::styled(":", Style::default().fg(Color::Yellow)),
-            Span::styled(
-                format!(" {buf}"),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!("  !{e}"), Style::default().fg(Color::Red)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled(":", Style::default().fg(Color::Yellow)),
-            Span::styled(
-                format!(" {buf}\u{2588}"),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  (/details)", Style::default().fg(Color::DarkGray)),
-        ])
+fn draw_prompt_overlay(frame: &mut Frame, area: Rect, state: &UiState) {
+    let buf = state.nav.prompt_buffer().unwrap_or("");
+    let err = state.nav.prompt_error();
+    let focused = match &state.nav {
+        NavMode::PromptInsert { focused_widget, .. } => focused_widget
+            .as_deref()
+            .unwrap_or("whole detail"),
+        _ => "whole detail",
     };
-    frame.render_widget(
-        Paragraph::new(line).style(Style::default().bg(Color::Black)),
-        area,
-    );
+
+    let width = 56.min(area.width.saturating_sub(2)).max(28);
+    let height = 9.min(area.height.saturating_sub(1)).max(7);
+    let overlay = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, overlay);
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(" widget: {focused}"),
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{buf}\u{2588}"),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+    ];
+    if let Some(e) = err {
+        lines.push(Line::from(Span::styled(
+            format!("! {e}"),
+            Style::default().fg(Color::Red),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            "Enter send · Esc cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        )
+        .title(Span::styled(
+            " prompt ",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    frame.render_widget(Paragraph::new(lines).block(block), overlay);
 }
 
 fn draw_enrich_overlay(frame: &mut Frame, area: Rect, state: &UiState) {
@@ -460,8 +559,9 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &UiState) {
 
 fn chunk_opts(state: &UiState, chunk_index: usize, chunk: &TuiChunk) -> ChunkRenderOpts {
     let scroll = *state.widget_scroll.get(&chunk.widget_id).unwrap_or(&0);
-    let idle_focused =
-        matches!(state.nav, NavMode::Idle) && state.focused_chunk_index() == Some(chunk_index);
+    let idle_focused = (matches!(state.nav, NavMode::Idle)
+        || (matches!(state.nav, NavMode::DetailScreen { .. }) && state.detail_focus))
+        && state.focused_chunk_index() == Some(chunk_index);
 
     let yellow = match &state.nav {
         NavMode::Browse => state.hover_chunk_index() == Some(chunk_index),
@@ -563,8 +663,8 @@ fn mode_hint(state: &UiState) -> String {
         NavMode::Browse => format!("↑↓ page · Enter open · Esc idle · hover={hover_id}"),
         NavMode::TableInteract { .. } => "↑↓ row · Enter open · Esc back".into(),
         NavMode::AwaitDetail { .. } => "waiting for detail\u{2026}".into(),
-        NavMode::DetailScreen { .. } => "i cmd · Esc board · q quit".into(),
-        NavMode::CommandInsert { .. } => "type /details · Enter · Esc cancel".into(),
+        NavMode::DetailScreen { .. } => "Tab focus · p prompt · Esc board · q quit".into(),
+        NavMode::PromptInsert { .. } => "type prompt · Enter send · Esc cancel".into(),
         NavMode::AwaitEnrich { .. } => "request in flight · q quit".into(),
         NavMode::AwaitBoard { .. } => "waiting for board\u{2026}".into(),
     }
@@ -596,7 +696,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &UiState) {
         NavMode::Browse => Color::Yellow,
         NavMode::TableInteract { .. } => Color::Yellow,
         NavMode::DetailScreen { .. } => Color::Magenta,
-        NavMode::CommandInsert { .. } => Color::Yellow,
+        NavMode::PromptInsert { .. } => Color::Yellow,
         NavMode::AwaitDetail { .. }
         | NavMode::AwaitBoard { .. }
         | NavMode::AwaitEnrich { .. } => Color::Yellow,

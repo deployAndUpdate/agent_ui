@@ -117,6 +117,36 @@ describe('reactToUserAction', () => {
     expect(body.sessionId).toBe('s1');
   });
 
+  it('command /prompt posts webhook with userPrompt as systemPrompt', async () => {
+    await store.saveSessionWithOutbox({ sessionId: 's1', manifest: board });
+    const fetchImpl = vi.fn(async () => new Response('ok', { status: 200 }));
+    const { reacted } = await reactToUserAction({
+      sessionId: 's1',
+      action: {
+        event: 'USER_ACTION',
+        taskId: 'detail_w_results_0',
+        widgetId: 'w_detail_body',
+        action: 'command',
+        payload: {
+          command: '/prompt',
+          userPrompt: 'add a timeline',
+          systemPrompt: 'add a timeline',
+          focusedWidgetId: 'w_detail_body',
+        },
+      },
+      store,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      env: {
+        TUI_AGENT_WEBHOOK_URL: 'http://127.0.0.1:9090/agent',
+        VISUAL_ENGINE_API: 'http://127.0.0.1:3001',
+      } as NodeJS.ProcessEnv,
+    });
+    expect(reacted).toBe(true);
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body));
+    expect(body.command).toBe('/prompt');
+    expect(body.systemPrompt).toBe('add a timeline');
+  });
+
   it('command /details without webhook URL does not react', async () => {
     await store.saveSessionWithOutbox({ sessionId: 's1', manifest: board });
     const fetchImpl = vi.fn();
@@ -132,6 +162,28 @@ describe('reactToUserAction', () => {
       store,
       fetchImpl: fetchImpl as unknown as typeof fetch,
       env: {} as NodeJS.ProcessEnv,
+    });
+    expect(reacted).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('command /foo skips webhook', async () => {
+    await store.saveSessionWithOutbox({ sessionId: 's1', manifest: board });
+    const fetchImpl = vi.fn();
+    const { reacted } = await reactToUserAction({
+      sessionId: 's1',
+      action: {
+        event: 'USER_ACTION',
+        taskId: 'detail_w_results_0',
+        widgetId: 'w_results',
+        action: 'command',
+        payload: { command: '/foo' },
+      },
+      store,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      env: {
+        TUI_AGENT_WEBHOOK_URL: 'http://127.0.0.1:9090/agent',
+      } as NodeJS.ProcessEnv,
     });
     expect(reacted).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();

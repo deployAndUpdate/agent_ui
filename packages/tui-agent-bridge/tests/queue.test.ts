@@ -42,6 +42,7 @@ describe('command dispatch', () => {
   it('knows /details', () => {
     expect(isKnownCommand('/details')).toBe(true);
     expect(isKnownCommand(' /details ')).toBe(true);
+    expect(isKnownCommand('/prompt')).toBe(true);
     expect(isKnownCommand('/foo')).toBe(false);
   });
 });

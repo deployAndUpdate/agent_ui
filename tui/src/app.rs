@@ -12,7 +12,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use crate::action::{DetailCtx, UserAction};
+use crate::action::{CommandMeta, DetailCtx, UserAction};
 use crate::model::{ServerEvent, WsStatus};
 use crate::nav::{table_row_cells, NavMode, PAGE_STEP};
 use crate::net::spawn_ws_client;
@@ -63,15 +63,57 @@ impl App {
             .unwrap_or_else(|| "unknown".into())
     }
 
+    fn command_widget_id(&self, fallback: &str) -> String {
+        self.state
+            .focused_widget_id()
+            .or_else(|| {
+                self.state
+                    .detail_ctx
+                    .as_ref()
+                    .map(|c| c.source_widget_id.clone())
+                    .filter(|s| !s.is_empty())
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if fallback.is_empty() {
+                    "w_detail_body".into()
+                } else {
+                    fallback.to_string()
+                }
+            })
+    }
+
+    fn fire_command(&mut self, command: &str, user_prompt: Option<String>) {
+        let from_widget = match &self.state.nav {
+            NavMode::DetailScreen { from_widget }
+            | NavMode::AwaitEnrich { from_widget, .. }
+            | NavMode::PromptInsert { from_widget, .. } => from_widget.clone(),
+            _ => String::new(),
+        };
+        let widget_id = self.command_widget_id(&from_widget);
+        let meta = CommandMeta {
+            user_prompt,
+            focused_widget_id: self.state.focused_widget_id(),
+            focused_chunk: self.state.focused_chunk_json(),
+            current_detail: self.state.current_detail_json(),
+        };
+        let action = UserAction::command(
+            self.task_id(),
+            widget_id,
+            command,
+            self.state.detail_ctx.as_ref(),
+            Some(&meta),
+        );
+        self.state.enter_await_enrich(command);
+        self.send_action(action);
+    }
+
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
-        // q quits except while typing a command (allow literal q in buffer)
-        if matches!(code, KeyCode::Char('q'))
-            && !matches!(self.state.nav, NavMode::CommandInsert { .. })
-        {
+        // q quits except while typing a prompt (allow literal q in buffer)
+        if matches!(code, KeyCode::Char('q')) && !self.state.nav.is_typing() {
             return true;
         }
 
-        // AwaitEnrich: ignore nav keys (still allow q via above)
         if matches!(self.state.nav, NavMode::AwaitEnrich { .. }) {
             return false;
         }
@@ -85,7 +127,7 @@ impl App {
             NavMode::Browse => self.handle_browse_key(code, modifiers),
             NavMode::TableInteract { .. } => self.handle_table_key(code),
             NavMode::DetailScreen { .. } => self.handle_detail_key(code),
-            NavMode::CommandInsert { .. } => self.handle_command_key(code),
+            NavMode::PromptInsert { .. } => self.handle_prompt_key(code),
             NavMode::AwaitDetail { .. }
             | NavMode::AwaitBoard { .. }
             | NavMode::AwaitEnrich { .. } => false,
@@ -193,6 +235,7 @@ impl App {
                         row_index: Some(row),
                         row: cells.clone(),
                     });
+                    self.state.details_auto_sent = false;
                     let action =
                         UserAction::select_row(self.task_id(), widget_id.clone(), row, cells);
                     self.send_action(action);
@@ -206,8 +249,8 @@ impl App {
 
     fn handle_detail_key(&mut self, code: KeyCode) -> bool {
         match code {
-            KeyCode::Char('i') => {
-                self.state.open_command_insert();
+            KeyCode::Char('p') => {
+                self.state.open_prompt_insert();
             }
             KeyCode::Esc => {
                 if let NavMode::DetailScreen { from_widget } = &self.state.nav {
@@ -216,42 +259,29 @@ impl App {
                     self.state.nav = NavMode::AwaitBoard { from_widget };
                 }
             }
+            KeyCode::Tab => self.state.focus_next(),
+            KeyCode::BackTab => self.state.focus_prev(),
+            KeyCode::Char('[') => self.state.focus_prev(),
+            KeyCode::Char(']') => self.state.focus_next(),
+            KeyCode::Char('j') | KeyCode::Down => self.state.scroll_focused(1),
+            KeyCode::Char('k') | KeyCode::Up => self.state.scroll_focused(-1),
             _ => {}
         }
         false
     }
 
-    fn handle_command_key(&mut self, code: KeyCode) -> bool {
+    fn handle_prompt_key(&mut self, code: KeyCode) -> bool {
         match code {
             KeyCode::Esc => {
-                self.state.cmd_cancel();
+                self.state.prompt_cancel();
             }
             KeyCode::Enter => {
-                if let Ok((from_widget, cmd)) = self.state.cmd_try_submit() {
-                    let widget_id = self
-                        .state
-                        .detail_ctx
-                        .as_ref()
-                        .map(|c| c.source_widget_id.clone())
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| {
-                            if from_widget.is_empty() {
-                                "w_detail_body".into()
-                            } else {
-                                from_widget
-                            }
-                        });
-                    let action = UserAction::command(
-                        self.task_id(),
-                        widget_id,
-                        &cmd,
-                        self.state.detail_ctx.as_ref(),
-                    );
-                    self.send_action(action);
+                if let Ok(text) = self.state.prompt_try_submit() {
+                    self.fire_command("/prompt", Some(text));
                 }
             }
-            KeyCode::Backspace => self.state.cmd_backspace(),
-            KeyCode::Char(c) if !c.is_control() => self.state.cmd_push_char(c),
+            KeyCode::Backspace => self.state.prompt_backspace(),
+            KeyCode::Char(c) if !c.is_control() => self.state.prompt_push_char(c),
             _ => {}
         }
         false
@@ -266,16 +296,7 @@ impl App {
 
         loop {
             let size = terminal.size()?;
-            let show_cmd = matches!(self.state.nav, NavMode::CommandInsert { .. });
-            let constraints = if show_cmd {
-                vec![
-                    Constraint::Min(3),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                ]
-            } else {
-                vec![Constraint::Min(3), Constraint::Length(1)]
-            };
+            let constraints = vec![Constraint::Min(3), Constraint::Length(1)];
             let body_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(constraints)
@@ -310,6 +331,9 @@ impl App {
                     match maybe_msg {
                         Some(ServerEvent::RenderManifest(m)) => {
                             self.state.set_manifest(m);
+                            if self.state.consume_auto_details() {
+                                self.fire_command("/details", None);
+                            }
                             self.state.status = WsStatus::Live;
                         }
                         Some(ServerEvent::Status(s)) => {

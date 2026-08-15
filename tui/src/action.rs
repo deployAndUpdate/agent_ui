@@ -21,6 +21,14 @@ pub struct DetailCtx {
     pub row: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct CommandMeta {
+    pub user_prompt: Option<String>,
+    pub focused_widget_id: Option<String>,
+    pub focused_chunk: Option<Value>,
+    pub current_detail: Option<Value>,
+}
+
 impl UserAction {
     pub fn select_row(
         task_id: impl Into<String>,
@@ -55,13 +63,15 @@ impl UserAction {
         widget_id: impl Into<String>,
         command: &str,
         detail_ctx: Option<&DetailCtx>,
+        meta: Option<&CommandMeta>,
     ) -> Self {
         let task_id = task_id.into();
         let widget_id = widget_id.into();
+        let user_prompt = meta.and_then(|m| m.user_prompt.as_deref()).unwrap_or("");
         let system_prompt = if command == "/details" {
             DETAILS_SYSTEM_PROMPT
         } else {
-            ""
+            user_prompt
         };
         let mut payload = serde_json::json!({
             "command": command,
@@ -70,6 +80,9 @@ impl UserAction {
             "context": { "sessionHint": true },
         });
         if let Some(obj) = payload.as_object_mut() {
+            if command == "/prompt" {
+                obj.insert("userPrompt".into(), Value::String(user_prompt.to_string()));
+            }
             if let Some(ctx) = detail_ctx {
                 obj.insert(
                     "rowIndex".into(),
@@ -85,6 +98,17 @@ impl UserAction {
                 );
             } else {
                 obj.insert("rowIndex".into(), Value::Null);
+            }
+            if let Some(meta) = meta {
+                if let Some(id) = &meta.focused_widget_id {
+                    obj.insert("focusedWidgetId".into(), Value::String(id.clone()));
+                }
+                if let Some(chunk) = &meta.focused_chunk {
+                    obj.insert("focusedChunk".into(), chunk.clone());
+                }
+                if let Some(detail) = &meta.current_detail {
+                    obj.insert("currentDetail".into(), detail.clone());
+                }
             }
         }
         Self {
@@ -117,15 +141,12 @@ pub fn on_manifest_received(mode: &mut crate::nav::NavMode, manifest: &TuiManife
         NavMode::AwaitBoard { .. } => {
             *mode = NavMode::Browse;
         }
-        NavMode::DetailScreen { .. } | NavMode::CommandInsert { .. } => {
+        NavMode::DetailScreen { .. } | NavMode::PromptInsert { .. } => {
             if !is_detail {
                 *mode = NavMode::Browse;
-            } else if matches!(mode, NavMode::CommandInsert { .. }) {
-                // enriched detail while somehow in cmd — return to detail
-                if let NavMode::CommandInsert { from_widget, .. } = mode {
-                    let fw = from_widget.clone();
-                    *mode = NavMode::DetailScreen { from_widget: fw };
-                }
+            } else if let NavMode::PromptInsert { from_widget, .. } = mode {
+                let fw = from_widget.clone();
+                *mode = NavMode::DetailScreen { from_widget: fw };
             }
         }
         NavMode::Idle | NavMode::Browse | NavMode::TableInteract { .. } => {
@@ -143,7 +164,7 @@ pub fn on_manifest_received(mode: &mut crate::nav::NavMode, manifest: &TuiManife
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nav::NavMode;
+    use crate::nav::{should_auto_details, NavMode};
     use crate::model::TuiManifest;
 
     fn dummy_manifest() -> TuiManifest {
@@ -232,10 +253,54 @@ mod tests {
                 row_index: Some(1),
                 row: vec!["a".into(), "b".into()],
             }),
+            None,
         );
         assert_eq!(a.action, "command");
         assert_eq!(a.payload["command"], "/details");
         assert_eq!(a.payload["systemPrompt"], "more details");
         assert_eq!(a.payload["rowIndex"], 1);
+    }
+
+    #[test]
+    fn prompt_action_includes_focus_and_user_text() {
+        let a = UserAction::command(
+            "detail_w_1",
+            "w_detail_body",
+            "/prompt",
+            Some(&DetailCtx {
+                source_widget_id: "w_table".into(),
+                row_index: Some(0),
+                row: vec!["x".into()],
+            }),
+            Some(&CommandMeta {
+                user_prompt: Some("add a list of facts".into()),
+                focused_widget_id: Some("w_detail_body".into()),
+                focused_chunk: Some(serde_json::json!({
+                    "widgetId": "w_detail_body",
+                    "type": "Paragraph",
+                })),
+                current_detail: Some(serde_json::json!({ "taskId": "detail_w_1" })),
+            }),
+        );
+        assert_eq!(a.payload["command"], "/prompt");
+        assert_eq!(a.payload["systemPrompt"], "add a list of facts");
+        assert_eq!(a.payload["userPrompt"], "add a list of facts");
+        assert_eq!(a.payload["focusedWidgetId"], "w_detail_body");
+        assert_eq!(a.payload["focusedChunk"]["widgetId"], "w_detail_body");
+        assert_eq!(a.payload["currentDetail"]["taskId"], "detail_w_1");
+    }
+
+    #[test]
+    fn auto_details_flag_skips_agent_callback() {
+        let stub_before = NavMode::AwaitDetail {
+            widget_id: "w".into(),
+            row: 0,
+        };
+        let mut after = stub_before.clone();
+        let mut m = dummy_manifest();
+        m.task_id = "detail_w_0".into();
+        on_manifest_received(&mut after, &m);
+        assert!(should_auto_details(&stub_before, &after, false));
+        assert!(!should_auto_details(&stub_before, &after, true));
     }
 }

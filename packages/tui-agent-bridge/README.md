@@ -1,13 +1,15 @@
 # TUI Agent Bridge (daemon)
 
-Long-lived `/details` adapter. `./vae` starts it on `127.0.0.1:9090`. Visual Engine does **not** embed an LLM; this process owns the warm agent session.
+Long-lived `/details` and `/prompt` adapter. `./vae` starts it on `127.0.0.1:9090`. Visual Engine does **not** embed an LLM; this process owns the warm agent session.
 
 ```
-TUI /details
+TUI /details or /prompt
   → POST TUI_AGENT_WEBHOOK_URL   (schema: schemas/tui-agent-webhook.schema.json)
   → this daemon (queue per sessionId)
   → POST callback.manifestUrl    { sessionId, manifest }  (taskId must be detail_*)
 ```
+
+`/prompt` patches are merged into `payload.currentDetail` (same widgetId updates, new ids append).
 
 ## Default driver (`auto`)
 
@@ -20,7 +22,7 @@ TUI /details
 
 `GET /health` → `{ ok, role: "daemon", driver, llm: "n/a"|"warming"|"ready"|"error", busySessions }`.
 
-Jobs for the same `sessionId` run one at a time. Unknown commands (not `/details`) fail and callback an error detail board so the TUI leaves AwaitEnrich.
+Jobs for the same `sessionId` run one at a time. Known commands: `/details`, `/prompt`. Unknown commands fail and callback an error detail board so the TUI leaves AwaitEnrich.
 
 ## Drivers
 
@@ -69,7 +71,7 @@ npm run bridge
 TUI_SESSION_ID=demo npm run dev:tui
 ```
 
-Detail → `i` → `/details` → Enter → overlay until callback.
+Table row Enter → auto `/details` overlay. On the filled detail: Tab focuses a widget, `p` opens a prompt box; the daemon merges the reply onto the detail board.
 
 ## Env
 

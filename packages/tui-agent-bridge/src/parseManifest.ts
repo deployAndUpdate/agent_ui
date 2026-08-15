@@ -127,3 +127,40 @@ export function normalizeDetailManifest(
   }
   return manifest;
 }
+
+/** Full TuiManifest, or `{ chunks: [...] }` / `{ layout: { chunks } }` patch. */
+export function normalizePatchManifest(
+  raw: unknown,
+  fallbackTaskId: string,
+): TuiManifest {
+  try {
+    return normalizeDetailManifest(raw, fallbackTaskId);
+  } catch (first) {
+    const parsed = extractJsonObject(
+      typeof raw === 'string' ? raw : JSON.stringify(raw),
+    );
+    if (!parsed || typeof parsed !== 'object') throw first;
+    const obj = parsed as {
+      layout?: { chunks?: unknown };
+      chunks?: unknown;
+      manifest?: { layout?: { chunks?: unknown }; chunks?: unknown };
+    };
+    const inner = obj.manifest && typeof obj.manifest === 'object' ? obj.manifest : obj;
+    const chunks = Array.isArray(inner.layout?.chunks)
+      ? inner.layout.chunks
+      : Array.isArray(inner.chunks)
+        ? inner.chunks
+        : null;
+    if (!chunks || chunks.length === 0) throw first;
+    return normalizeDetailManifest(
+      {
+        taskId: fallbackTaskId.startsWith('detail_')
+          ? fallbackTaskId
+          : `detail_${fallbackTaskId}`,
+        operation: 'SYNC_DASHBOARD',
+        layout: { direction: 'vertical', chunks },
+      },
+      fallbackTaskId,
+    );
+  }
+}

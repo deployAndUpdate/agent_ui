@@ -23,7 +23,7 @@ const SERIES_COLORS: [Color; 6] = [
 ];
 
 pub struct ChunkRenderOpts {
-    /// Idle Tab focus (cyan).
+    /// Idle / DetailScreen Tab focus (cyan).
     pub focused: bool,
     /// Browse / TableInteract yellow hover.
     pub hovered: bool,

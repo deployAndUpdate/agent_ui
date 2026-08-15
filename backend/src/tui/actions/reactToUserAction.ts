@@ -43,7 +43,7 @@ function detailManifest(
           size: 2,
           props: {
             title: 'Nav',
-            text: 'Press Esc in the TUI to return to the board. i → /details for more.',
+            text: 'Waiting for agent enrich. Esc → board. Tab focuses a widget; p prompt.',
             style: 'gray',
           },
         },
@@ -81,7 +81,7 @@ export function isBuiltinReactorEnabled(): boolean {
 /**
  * Built-in action reactor:
  * - select_row / navigate_back: ephemeral outbox (session stays board)
- * - command /details: HTTP agent webhook (TUI_AGENT_WEBHOOK_URL)
+ * - command /details | /prompt: HTTP agent webhook (TUI_AGENT_WEBHOOK_URL)
  */
 export async function reactToUserAction(opts: {
   sessionId: string;
@@ -98,7 +98,7 @@ export async function reactToUserAction(opts: {
   if (action.action === 'command') {
     const command =
       typeof action.payload.command === 'string' ? action.payload.command : '';
-    if (command !== '/details') {
+    if (command !== '/details' && command !== '/prompt') {
       log.warn({ sessionId, command }, 'unknown command; skip webhook');
       return { reacted: false };
     }

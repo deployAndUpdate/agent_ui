@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://visual-engine.local/schemas/tui-agent-webhook.json",
-  "title": "TUI Agent Webhook (/details)",
-  "description": "Universal contract: Visual Engine POSTs this to TUI_AGENT_WEBHOOK_URL. Any agent (Cursor, Claude Code, OpenCode, custom) must eventually POST a TuiManifest with taskId detail_* to callback.manifestUrl.",
+  "title": "TUI Agent Webhook (/details, /prompt)",
+  "description": "Universal contract: Visual Engine POSTs this to TUI_AGENT_WEBHOOK_URL. Any agent must eventually POST a TuiManifest with taskId detail_* to callback.manifestUrl. /prompt patches are merged into the current detail board.",
   "type": "object",
   "required": [
     "systemPrompt",
@@ -15,7 +15,7 @@
   ],
   "properties": {
     "systemPrompt": { "type": "string" },
-    "command": { "type": "string", "const": "/details" },
+    "command": { "type": "string", "enum": ["/details", "/prompt"] },
     "sessionId": { "type": "string" },
     "taskId": { "type": "string", "description": "Usually detail_<widgetId>_<rowIndex>" },
     "widgetId": { "type": "string" },
@@ -27,7 +27,10 @@
         "rowIndex": { "type": ["integer", "null"] },
         "row": { "type": "array", "items": { "type": "string" } },
         "sourceWidgetId": { "type": "string" },
-        "detailTaskId": { "type": "string" }
+        "userPrompt": { "type": "string" },
+        "focusedWidgetId": { "type": "string" },
+        "focusedChunk": { "type": "object" },
+        "currentDetail": {}
       },
       "additionalProperties": true
     },

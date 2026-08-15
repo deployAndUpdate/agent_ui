@@ -64,24 +64,22 @@ Optional: `title`
 
 ## TUI navigation
 
-Modes: `Idle` → `i` → `Browse` → `Enter` on Table → `TableInteract` → `Enter` on row → detail → `i` → `/details` → agent enrich → `Esc` back.
+Modes: `Idle` → `i` → `Browse` → `Enter` on Table → `TableInteract` → `Enter` on row → stub detail → auto `/details` → `Tab` focus → `p` prompt → `Esc` back.
 
 | Mode | Keys | UI |
 |------|------|-----|
 | Idle | `i` browse; Tab/`[` `]` focus; ↑↓/`jk` widget scroll; PgUp/PgDn page; `q` quit | cyan Tab focus |
 | Browse | ↑↓ = page (±5, same as PgUp/PgDn); Enter open Table; Esc → Idle | yellow hover |
 | Table | ↑↓/`jk` row; Enter → `select_row`; Esc → Browse | yellow border + row |
-| Detail | `i` cmd; Esc → `navigate_back`; `q` quit | detail board |
-| Command | type `/details`; Enter submit; Esc cancel | cmdline `: /…` |
-| AwaitEnrich | wait for agent SYNC | status: waiting agent |
+| Detail | Tab/`[` `]` focus; `p` prompt; Esc → `navigate_back`; `q` quit | cyan Tab focus on chunk |
+| Prompt | type; Enter send; Esc cancel (`q` is a letter) | overlay text box |
+| AwaitEnrich | wait for agent SYNC | overlay spinner |
 
-`Esc` does not quit the app (only `q`). In CommandInsert, Esc cancels the cmdline (does not navigate_back).
+`Esc` does not quit the app (only `q`). In PromptInsert, Esc cancels the box (does not navigate_back).
 
 ## Detail command `/details`
 
-On DetailScreen: `i` → type `/details` → Enter.
-
-Client sends `action: "command"` with `payload.systemPrompt` = `more details`. Backend POSTs to `TUI_AGENT_WEBHOOK_URL`. Agent must callback:
+Opening a table row auto-sends `action: "command"` `/details` (`payload.systemPrompt` = `more details`) after the builtin stub lands. Backend POSTs to `TUI_AGENT_WEBHOOK_URL`. Agent must callback:
 
 ```bash
 POST /api/v1/tui/manifest
@@ -89,6 +87,12 @@ POST /api/v1/tui/manifest
 ```
 
 Keep `taskId` prefix `detail_` so the TUI stays on DetailScreen. Backend treats `detail_*` POSTs as **ephemeral** (outbox only; session board unchanged).
+
+## Prompt command `/prompt`
+
+On DetailScreen: Tab to a widget (optional) → `p` → type → Enter.
+
+Webhook `command` is `/prompt`. `systemPrompt` / `userPrompt` is the typed text. Payload includes `focusedWidgetId`, `focusedChunk`, `currentDetail` (the board on screen). The daemon merges returned chunks into that board (update same `widgetId`, append new ids) and callbacks `SYNC_DASHBOARD` with the same `detail_*` taskId.
 
 ### Local / universal agent bridge
 

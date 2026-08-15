@@ -9,8 +9,9 @@ pub enum NavMode {
     TableInteract { widget_id: String, row: usize },
     AwaitDetail { widget_id: String, row: usize },
     DetailScreen { from_widget: String },
-    CommandInsert {
+    PromptInsert {
         from_widget: String,
+        focused_widget: Option<String>,
         buffer: String,
         error: Option<String>,
     },
@@ -29,7 +30,7 @@ impl NavMode {
             Self::TableInteract { .. } => "table",
             Self::AwaitDetail { .. } => "await-detail",
             Self::DetailScreen { .. } => "detail",
-            Self::CommandInsert { .. } => "cmd",
+            Self::PromptInsert { .. } => "prompt",
             Self::AwaitEnrich { .. } => "await-enrich",
             Self::AwaitBoard { .. } => "await-board",
         }
@@ -46,46 +47,33 @@ impl NavMode {
         )
     }
 
-    pub fn command_buffer(&self) -> Option<&str> {
+    pub fn prompt_buffer(&self) -> Option<&str> {
         match self {
-            Self::CommandInsert { buffer, .. } => Some(buffer.as_str()),
+            Self::PromptInsert { buffer, .. } => Some(buffer.as_str()),
             _ => None,
         }
     }
 
-    pub fn command_error(&self) -> Option<&str> {
+    pub fn prompt_error(&self) -> Option<&str> {
         match self {
-            Self::CommandInsert { error, .. } => error.as_deref(),
+            Self::PromptInsert { error, .. } => error.as_deref(),
             _ => None,
         }
+    }
+
+    pub fn is_typing(&self) -> bool {
+        matches!(self, Self::PromptInsert { .. })
     }
 }
 
 pub const PAGE_STEP: u16 = 5;
-pub const KNOWN_COMMANDS: &[&str] = &["/details"];
 pub const DETAILS_SYSTEM_PROMPT: &str = "more details";
 
-pub fn normalize_command(raw: &str) -> String {
-    let t = raw.trim();
-    if t.is_empty() {
-        return String::new();
-    }
-    if t.starts_with('/') {
-        t.to_string()
-    } else {
-        format!("/{t}")
-    }
-}
-
-pub fn validate_command(raw: &str) -> Result<String, String> {
-    let cmd = normalize_command(raw);
-    if cmd.is_empty() {
-        return Err("empty command".into());
-    }
-    if !KNOWN_COMMANDS.contains(&cmd.as_str()) {
-        return Err(format!("unknown command: {cmd} (try /details)"));
-    }
-    Ok(cmd)
+/// After the builtin stub lands, send `/details` once (not on later agent callbacks).
+pub fn should_auto_details(before: &NavMode, after: &NavMode, already_sent: bool) -> bool {
+    !already_sent
+        && matches!(before, NavMode::AwaitDetail { .. })
+        && matches!(after, NavMode::DetailScreen { .. })
 }
 
 /// Pick chunk index that best intersects the top third of the viewport.
@@ -173,13 +161,14 @@ mod tests {
             "table"
         );
         assert_eq!(
-            NavMode::CommandInsert {
+            NavMode::PromptInsert {
                 from_widget: "w".into(),
-                buffer: "/".into(),
+                focused_widget: None,
+                buffer: "hello".into(),
                 error: None,
             }
             .label(),
-            "cmd"
+            "prompt"
         );
     }
 
@@ -189,10 +178,24 @@ mod tests {
     }
 
     #[test]
-    fn validate_details_command() {
-        assert_eq!(validate_command("/details").unwrap(), "/details");
-        assert_eq!(validate_command("details").unwrap(), "/details");
-        assert!(validate_command("/unknown").is_err());
-        assert!(validate_command("").is_err());
+    fn auto_details_only_once_after_stub() {
+        let before = NavMode::AwaitDetail {
+            widget_id: "w_table".into(),
+            row: 0,
+        };
+        let after = NavMode::DetailScreen {
+            from_widget: "w_table".into(),
+        };
+        assert!(should_auto_details(&before, &after, false));
+        assert!(!should_auto_details(&before, &after, true));
+        let enrich = NavMode::AwaitEnrich {
+            from_widget: "w_table".into(),
+            command: "/details".into(),
+        };
+        let after_agent = NavMode::DetailScreen {
+            from_widget: "w_table".into(),
+        };
+        assert!(!should_auto_details(&enrich, &after_agent, true));
+        assert!(!should_auto_details(&enrich, &after_agent, false));
     }
 }

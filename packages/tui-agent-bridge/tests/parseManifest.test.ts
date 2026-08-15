@@ -61,6 +61,25 @@ describe('parseManifest', () => {
   it('strips trailing commas', () => {
     expect(extractJsonObject('{"a":1,}')).toEqual({ a: 1 });
   });
+
+  it('normalizePatchManifest accepts chunks-only object', async () => {
+    const { normalizePatchManifest } = await import('../src/parseManifest.js');
+    const m = normalizePatchManifest(
+      JSON.stringify({
+        chunks: [
+          {
+            widgetId: 'w_extra',
+            type: 'Paragraph',
+            size: 3,
+            props: { text: 'hi' },
+          },
+        ],
+      }),
+      'detail_w_x_0',
+    );
+    expect(m.taskId).toBe('detail_w_x_0');
+    expect(m.layout.chunks[0]?.widgetId).toBe('w_extra');
+  });
 });
 
 describe('stubEnrichManifest', () => {
