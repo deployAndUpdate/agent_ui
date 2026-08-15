@@ -9,6 +9,15 @@ pub enum NavMode {
     TableInteract { widget_id: String, row: usize },
     AwaitDetail { widget_id: String, row: usize },
     DetailScreen { from_widget: String },
+    CommandInsert {
+        from_widget: String,
+        buffer: String,
+        error: Option<String>,
+    },
+    AwaitEnrich {
+        from_widget: String,
+        command: String,
+    },
     AwaitBoard { from_widget: String },
 }
 
@@ -20,6 +29,8 @@ impl NavMode {
             Self::TableInteract { .. } => "table",
             Self::AwaitDetail { .. } => "await-detail",
             Self::DetailScreen { .. } => "detail",
+            Self::CommandInsert { .. } => "cmd",
+            Self::AwaitEnrich { .. } => "await-enrich",
             Self::AwaitBoard { .. } => "await-board",
         }
     }
@@ -29,11 +40,53 @@ impl NavMode {
     }
 
     pub fn is_waiting(&self) -> bool {
-        matches!(self, Self::AwaitDetail { .. } | Self::AwaitBoard { .. })
+        matches!(
+            self,
+            Self::AwaitDetail { .. } | Self::AwaitBoard { .. } | Self::AwaitEnrich { .. }
+        )
+    }
+
+    pub fn command_buffer(&self) -> Option<&str> {
+        match self {
+            Self::CommandInsert { buffer, .. } => Some(buffer.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn command_error(&self) -> Option<&str> {
+        match self {
+            Self::CommandInsert { error, .. } => error.as_deref(),
+            _ => None,
+        }
     }
 }
 
 pub const PAGE_STEP: u16 = 5;
+pub const KNOWN_COMMANDS: &[&str] = &["/details"];
+pub const DETAILS_SYSTEM_PROMPT: &str = "more details";
+
+pub fn normalize_command(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        return String::new();
+    }
+    if t.starts_with('/') {
+        t.to_string()
+    } else {
+        format!("/{t}")
+    }
+}
+
+pub fn validate_command(raw: &str) -> Result<String, String> {
+    let cmd = normalize_command(raw);
+    if cmd.is_empty() {
+        return Err("empty command".into());
+    }
+    if !KNOWN_COMMANDS.contains(&cmd.as_str()) {
+        return Err(format!("unknown command: {cmd} (try /details)"));
+    }
+    Ok(cmd)
+}
 
 /// Pick chunk index that best intersects the top third of the viewport.
 pub fn hover_from_viewport(
@@ -59,13 +112,11 @@ pub fn hover_from_viewport(
         if vis_bottom <= vis_top {
             continue;
         }
-        // Prefer chunks overlapping [0, band_end)
         let overlap_top = vis_top.max(0);
         let overlap_bottom = vis_bottom.min(i32::from(band_end));
         let score = if overlap_bottom > overlap_top {
             overlap_bottom - overlap_top + 1000
         } else {
-            // fallback: first visible
             vis_bottom - vis_top
         };
         match best {
@@ -106,7 +157,6 @@ mod tests {
     fn hover_picks_top_visible() {
         let chunks = vec![chunk("a", "Paragraph"), chunk("b", "Table"), chunk("c", "List")];
         let heights = vec![10u16, 10, 10];
-        // scrolled so b is at top of viewport
         let idx = hover_from_viewport(&chunks, &heights, 10, 20);
         assert_eq!(idx, Some(1));
     }
@@ -122,10 +172,27 @@ mod tests {
             .label(),
             "table"
         );
+        assert_eq!(
+            NavMode::CommandInsert {
+                from_widget: "w".into(),
+                buffer: "/".into(),
+                error: None,
+            }
+            .label(),
+            "cmd"
+        );
     }
 
     #[test]
     fn page_step_matches_plan() {
         assert_eq!(PAGE_STEP, 5);
+    }
+
+    #[test]
+    fn validate_details_command() {
+        assert_eq!(validate_command("/details").unwrap(), "/details");
+        assert_eq!(validate_command("details").unwrap(), "/details");
+        assert!(validate_command("/unknown").is_err());
+        assert!(validate_command("").is_err());
     }
 }

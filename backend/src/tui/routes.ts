@@ -46,6 +46,30 @@ export function createTuiRouter(deps: TuiRouterDeps): Router {
       return;
     }
 
+    // Option C: detail_* is ephemeral (outbox/WS only). Root session stays the board.
+    const ephemeralDetail = validation.data.taskId.startsWith('detail_');
+    if (ephemeralDetail) {
+      const outboxEvent = await deps.store.enqueueOutbox(sessionId, validation.data);
+      log.info(
+        {
+          sessionId,
+          taskId: validation.data.taskId,
+          outboxEventId: outboxEvent.id,
+          chunks: validation.data.layout.chunks.length,
+          ephemeral: true,
+        },
+        'tui ephemeral detail accepted',
+      );
+      res.status(200).json({
+        ok: true,
+        sessionId,
+        taskId: validation.data.taskId,
+        outboxEventId: outboxEvent.id,
+        ephemeral: true,
+      });
+      return;
+    }
+
     const result = await deps.store.saveSessionWithOutbox({
       sessionId,
       manifest: validation.data,

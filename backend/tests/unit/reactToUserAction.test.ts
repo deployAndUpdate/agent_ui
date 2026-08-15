@@ -1,7 +1,8 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import type { TuiManifest, TuiUserAction } from '@visual-engine/tui-shared';
 import { InMemoryTuiStore } from '../../src/tui/store/InMemoryTuiStore.js';
 import { reactToUserAction } from '../../src/tui/actions/reactToUserAction.js';
+import { postAgentWebhook } from '../../src/tui/actions/agentWebhook.js';
 import validTui from '../fixtures/tui-manifest.valid.json';
 
 const board = validTui as TuiManifest;
@@ -76,5 +77,82 @@ describe('reactToUserAction', () => {
     const pending = await store.listPendingOutbox();
     expect(pending.length).toBe(pendingBefore + 1);
     expect(pending[pending.length - 1]?.payload.taskId).toBe(board.taskId);
+  });
+
+  it('command /details posts webhook with systemPrompt more details', async () => {
+    await store.saveSessionWithOutbox({ sessionId: 's1', manifest: board });
+
+    const fetchImpl = vi.fn(async () => new Response('ok', { status: 200 }));
+
+    const action: TuiUserAction = {
+      event: 'USER_ACTION',
+      taskId: 'detail_w_results_0',
+      widgetId: 'w_results',
+      action: 'command',
+      payload: {
+        command: '/details',
+        systemPrompt: 'more details',
+        rowIndex: 0,
+      },
+    };
+
+    const { reacted } = await reactToUserAction({
+      sessionId: 's1',
+      action,
+      store,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      env: {
+        TUI_AGENT_WEBHOOK_URL: 'http://127.0.0.1:9090/agent',
+        VISUAL_ENGINE_API: 'http://127.0.0.1:3001',
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(reacted).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    const [, init] = fetchImpl.mock.calls[0]!;
+    const body = JSON.parse(String(init?.body));
+    expect(body.systemPrompt).toBe('more details');
+    expect(body.command).toBe('/details');
+    expect(body.callback.manifestUrl).toBe('http://127.0.0.1:3001/api/v1/tui/manifest');
+    expect(body.sessionId).toBe('s1');
+  });
+
+  it('command /details without webhook URL does not react', async () => {
+    await store.saveSessionWithOutbox({ sessionId: 's1', manifest: board });
+    const fetchImpl = vi.fn();
+    const { reacted } = await reactToUserAction({
+      sessionId: 's1',
+      action: {
+        event: 'USER_ACTION',
+        taskId: 'detail_w_results_0',
+        widgetId: 'w_results',
+        action: 'command',
+        payload: { command: '/details', systemPrompt: 'more details' },
+      },
+      store,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      env: {} as NodeJS.ProcessEnv,
+    });
+    expect(reacted).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('postAgentWebhook', () => {
+  it('skips when URL unset', async () => {
+    const r = await postAgentWebhook({
+      sessionId: 's',
+      action: {
+        event: 'USER_ACTION',
+        taskId: 't',
+        widgetId: 'w',
+        action: 'command',
+        payload: { command: '/details', systemPrompt: 'more details' },
+      },
+      currentManifest: null,
+      env: {} as NodeJS.ProcessEnv,
+    });
+    expect(r.sent).toBe(false);
+    expect(r.reason).toBe('no_url');
   });
 });

@@ -68,11 +68,38 @@ describe('TUI API (integration)', () => {
     expect(await tuiStore.getSession('tui_sess')).toBeNull();
   });
 
-  it('GET /api/v1/tui/session/:id returns snapshot', async () => {
+  it('POST /api/v1/tui/manifest detail_* is ephemeral (session board unchanged)', async () => {
     await tuiStore.saveSessionWithOutbox({ sessionId: 'tui_sess', manifest });
-    const res = await request(app).get('/api/v1/tui/session/tui_sess');
+
+    const detail = {
+      taskId: 'detail_w_results_0',
+      operation: 'SYNC_DASHBOARD',
+      layout: {
+        direction: 'vertical',
+        chunks: [
+          {
+            widgetId: 'w_detail_body',
+            type: 'Paragraph',
+            size: 4,
+            props: { text: 'enriched' },
+          },
+        ],
+      },
+    };
+
+    const res = await request(app).post('/api/v1/tui/manifest').send({
+      sessionId: 'tui_sess',
+      manifest: detail,
+    });
     expect(res.status).toBe(200);
-    expect(res.body.taskId).toBe('task_7749');
+    expect(res.body.ephemeral).toBe(true);
+    expect(res.body.taskId).toBe('detail_w_results_0');
+
+    const snap = await tuiStore.getSession('tui_sess');
+    expect(snap?.manifest.taskId).toBe('task_7749');
+
+    const pending = await tuiStore.listPendingOutbox();
+    expect(pending.some((e) => e.payload.taskId === 'detail_w_results_0')).toBe(true);
   });
 
   it('POST /api/v1/tui/action persists USER_ACTION and reacts with detail', async () => {
@@ -97,6 +124,23 @@ describe('TUI API (integration)', () => {
 
     const pending = await tuiStore.listPendingOutbox();
     expect(pending.some((e) => e.payload.taskId.startsWith('detail_w_results_'))).toBe(true);
+  });
+
+  it('POST /api/v1/tui/action command /details returns reacted false without webhook', async () => {
+    await tuiStore.saveSessionWithOutbox({ sessionId: 'tui_sess', manifest });
+    const res = await request(app)
+      .post('/api/v1/tui/action')
+      .send({
+        sessionId: 'tui_sess',
+        event: 'USER_ACTION',
+        taskId: 'detail_w_results_0',
+        widgetId: 'w_results',
+        action: 'command',
+        payload: { command: '/details', systemPrompt: 'more details' },
+      });
+    expect(res.status).toBe(202);
+    expect(res.body.reacted).toBe(false);
+    expect(tuiStore.listActions('tui_sess')).toHaveLength(1);
   });
 });
 

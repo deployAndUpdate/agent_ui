@@ -2,6 +2,7 @@ mod action;
 mod app;
 mod content_measure;
 mod layout_chunks;
+mod loader;
 mod model;
 mod nav;
 mod net;

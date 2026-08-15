@@ -1,0 +1,24 @@
+{
+  "name": "@visual-engine/tui-agent-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "tui-agent-bridge": "./bin/tui-agent-bridge.mjs"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@visual-engine/tui-shared": "*",
+    "tsx": "^4.19.3"
+  },
+  "optionalDependencies": {
+    "@cursor/sdk": "^1.0.28"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  }
+}

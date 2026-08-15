@@ -9,4 +9,4 @@ cargo install --path tui  # installs `vae-tui` to cargo bin
 
 Env: `TUI_SESSION_ID`, `TUI_WS_URL` — see `.env.example`.
 
-Keys: `i` browse · `Enter` open Table · `Esc` back · `Tab`/`[` `]` focus · `↑`/`↓`/`j`/`k` (idle: widget scroll; browse: page; table: row) · `PgUp`/`PgDn` page · `q` quit.
+Keys: `i` browse (idle) / cmd (detail) · `Enter` open · `Esc` back · `/details` enrich · `Tab` focus · `↑`/`↓`/`j`/`k` · `PgUp`/`PgDn` · `q` quit.

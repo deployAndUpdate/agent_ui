@@ -23,6 +23,7 @@
     "start": "bash ./vae",
     "smoke": "bash ./vae smoke",
     "agent": "npm run start -w @visual-engine/cli --",
+    "bridge": "npm run start -w @visual-engine/tui-agent-bridge",
     "build": "npm run build --workspaces --if-present && npm run build:tui"
   },
   "engines": {

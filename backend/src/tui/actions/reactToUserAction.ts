@@ -2,6 +2,7 @@ import type { TuiManifest, TuiUserAction } from '@visual-engine/tui-shared';
 import type { TuiStore } from '../store/types.js';
 import type { Logger } from '../../logging/logger.js';
 import { createLogger } from '../../logging/logger.js';
+import { postAgentWebhook } from './agentWebhook.js';
 
 function detailManifest(
   action: TuiUserAction,
@@ -42,7 +43,7 @@ function detailManifest(
           size: 2,
           props: {
             title: 'Nav',
-            text: 'Press Esc in the TUI to return to the board.',
+            text: 'Press Esc in the TUI to return to the board. i → /details for more.',
             style: 'gray',
           },
         },
@@ -78,23 +79,44 @@ export function isBuiltinReactorEnabled(): boolean {
 }
 
 /**
- * Built-in action reactor (option C):
- * - Session snapshot always stays the root board (agent SYNC).
- * - Detail is ephemeral: outbox/WS only, never persisted as session.
- * - navigate_back re-publishes the session board.
+ * Built-in action reactor:
+ * - select_row / navigate_back: ephemeral outbox (session stays board)
+ * - command /details: HTTP agent webhook (TUI_AGENT_WEBHOOK_URL)
  */
 export async function reactToUserAction(opts: {
   sessionId: string;
   action: TuiUserAction;
   store: TuiStore;
   logger?: Logger;
+  /** For tests */
+  fetchImpl?: typeof fetch;
+  env?: NodeJS.ProcessEnv;
 }): Promise<{ reacted: boolean }> {
+  const log = opts.logger ?? createLogger('info', { component: 'tui-reactor' });
+  const { sessionId, action, store } = opts;
+
+  if (action.action === 'command') {
+    const command =
+      typeof action.payload.command === 'string' ? action.payload.command : '';
+    if (command !== '/details') {
+      log.warn({ sessionId, command }, 'unknown command; skip webhook');
+      return { reacted: false };
+    }
+    const snap = await store.getSession(sessionId);
+    const result = await postAgentWebhook({
+      sessionId,
+      action,
+      currentManifest: snap?.manifest ?? null,
+      logger: log,
+      fetchImpl: opts.fetchImpl,
+      env: opts.env,
+    });
+    return { reacted: result.sent };
+  }
+
   if (!isBuiltinReactorEnabled()) {
     return { reacted: false };
   }
-
-  const log = opts.logger ?? createLogger('info', { component: 'tui-reactor' });
-  const { sessionId, action, store } = opts;
 
   if (action.action === 'select_row') {
     const snap = await store.getSession(sessionId);

@@ -1,33 +1,34 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
+use crate::action::DetailCtx;
 use crate::content_measure::allocated_height;
 use crate::layout_chunks::constraints_from_chunks;
+use crate::loader::{ring_lines, spinner_frame, status_phrase};
 use crate::model::{TuiChunk, TuiManifest, WsStatus};
-use crate::nav::{hover_from_viewport, table_row_count, NavMode, PAGE_STEP};
+use crate::nav::{hover_from_viewport, table_row_count, validate_command, NavMode, PAGE_STEP};
 use crate::widgets_render::{render_chunk, ChunkRenderOpts};
 
 pub struct UiState {
     pub session_id: String,
     pub status: WsStatus,
     pub manifest: Option<TuiManifest>,
-    /// Page (board) vertical scroll in rows.
     pub page_scroll: u16,
-    /// Focus index into scrollable chunk indices (Idle Tab focus).
     pub focus: usize,
-    /// Hover index into all chunks (Browse yellow highlight).
     pub hover: usize,
-    /// Per-widget vertical scroll offset.
     pub widget_scroll: HashMap<String, u16>,
     pub nav: NavMode,
-    /// Last body viewport height (for hover recompute).
     pub last_body_h: u16,
     pub last_body_w: u16,
+    pub detail_ctx: Option<DetailCtx>,
+    /// When `/details` was submitted; drives spinner until detail manifest arrives.
+    pub wait_started: Option<Instant>,
 }
 
 impl UiState {
@@ -43,6 +44,8 @@ impl UiState {
             nav: NavMode::Idle,
             last_body_h: 24,
             last_body_w: 80,
+            detail_ctx: None,
+            wait_started: None,
         }
     }
 
@@ -57,7 +60,6 @@ impl UiState {
         );
         self.manifest = Some(manifest);
         if reset_view {
-            // Fresh screen after nav transition or idle replace.
             if matches!(
                 self.nav,
                 NavMode::Idle | NavMode::Browse | NavMode::DetailScreen { .. }
@@ -70,10 +72,15 @@ impl UiState {
                 self.hover = 0;
             }
         }
+        if matches!(self.nav, NavMode::Browse | NavMode::Idle) {
+            self.detail_ctx = None;
+        }
+        if !matches!(self.nav, NavMode::AwaitEnrich { .. }) {
+            self.wait_started = None;
+        }
         self.recompute_hover();
     }
 
-    /// Chunk indices that support in-widget scroll (Idle Tab focus).
     pub fn scrollable_indices(&self) -> Vec<usize> {
         let Some(m) = &self.manifest else {
             return vec![];
@@ -222,27 +229,193 @@ impl UiState {
             widget_id: widget_id.clone(),
             row: next,
         };
-        // Keep selected row visible via widget_scroll
         let visible = self.last_body_h.saturating_sub(6).max(1) as usize;
         let scroll = next.saturating_sub(visible.saturating_sub(1));
         self.widget_scroll.insert(widget_id, scroll as u16);
+    }
+
+    pub fn open_command_insert(&mut self) {
+        let from_widget = match &self.nav {
+            NavMode::DetailScreen { from_widget } => from_widget.clone(),
+            _ => String::new(),
+        };
+        self.nav = NavMode::CommandInsert {
+            from_widget,
+            buffer: String::new(),
+            error: None,
+        };
+    }
+
+    pub fn cmd_push_char(&mut self, c: char) {
+        if let NavMode::CommandInsert { buffer, error, .. } = &mut self.nav {
+            buffer.push(c);
+            *error = None;
+        }
+    }
+
+    pub fn cmd_backspace(&mut self) {
+        if let NavMode::CommandInsert { buffer, error, .. } = &mut self.nav {
+            buffer.pop();
+            *error = None;
+        }
+    }
+
+    pub fn cmd_cancel(&mut self) {
+        if let NavMode::CommandInsert { from_widget, .. } = &self.nav {
+            let from_widget = from_widget.clone();
+            self.nav = NavMode::DetailScreen { from_widget };
+        }
+    }
+
+    pub fn cmd_try_submit(&mut self) -> Result<(String, String), ()> {
+        let NavMode::CommandInsert {
+            from_widget,
+            buffer,
+            ..
+        } = &self.nav
+        else {
+            return Err(());
+        };
+        let from_widget = from_widget.clone();
+        let buffer = buffer.clone();
+        match validate_command(&buffer) {
+            Ok(cmd) => {
+                self.nav = NavMode::AwaitEnrich {
+                    from_widget: from_widget.clone(),
+                    command: cmd.clone(),
+                };
+                self.wait_started = Some(Instant::now());
+                Ok((from_widget, cmd))
+            }
+            Err(msg) => {
+                if let NavMode::CommandInsert { error, .. } = &mut self.nav {
+                    *error = Some(msg);
+                }
+                Err(())
+            }
+        }
     }
 }
 
 pub fn draw(frame: &mut Frame, state: &UiState) {
     let area = frame.area();
+    let show_cmd = matches!(state.nav, NavMode::CommandInsert { .. });
+    let constraints = if show_cmd {
+        vec![
+            Constraint::Min(3),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ]
+    } else {
+        vec![Constraint::Min(3), Constraint::Length(1)]
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .constraints(constraints)
         .split(area);
 
     draw_body(frame, chunks[0], state);
-    draw_status(frame, chunks[1], state);
+    if matches!(state.nav, NavMode::AwaitEnrich { .. }) {
+        draw_enrich_overlay(frame, chunks[0], state);
+    }
+    if show_cmd {
+        draw_cmdline(frame, chunks[1], state);
+        draw_status(frame, chunks[2], state);
+    } else {
+        draw_status(frame, chunks[1], state);
+    }
+}
+
+fn draw_cmdline(frame: &mut Frame, area: Rect, state: &UiState) {
+    let buf = state.nav.command_buffer().unwrap_or("");
+    let err = state.nav.command_error();
+    let line = if let Some(e) = err {
+        Line::from(vec![
+            Span::styled(":", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!(" {buf}"),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("  !{e}"), Style::default().fg(Color::Red)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(":", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!(" {buf}\u{2588}"),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  (/details)", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    frame.render_widget(
+        Paragraph::new(line).style(Style::default().bg(Color::Black)),
+        area,
+    );
+}
+
+fn draw_enrich_overlay(frame: &mut Frame, area: Rect, state: &UiState) {
+    let elapsed = state
+        .wait_started
+        .map(|t| t.elapsed().as_millis())
+        .unwrap_or(0);
+    let frame_i = spinner_frame(elapsed);
+    let phrase = status_phrase(elapsed);
+    let cmd = match &state.nav {
+        NavMode::AwaitEnrich { command, .. } => command.as_str(),
+        _ => "/details",
+    };
+
+    let width = 42.min(area.width.saturating_sub(2)).max(24);
+    let height = 13.min(area.height.saturating_sub(1)).max(11);
+    let overlay = Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, overlay);
+
+    let mut lines: Vec<Line> = vec![Line::from("")];
+    for row in ring_lines(frame_i) {
+        lines.push(Line::from(Span::styled(
+            format!("    {row}"),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("    "),
+        Span::styled(
+            phrase,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("…", Style::default().fg(Color::Yellow)),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "    holding this screen until the board arrives",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .title(Span::styled(
+            format!(" {cmd} "),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ));
+    frame.render_widget(Paragraph::new(lines).block(block), overlay);
 }
 
 fn draw_body(frame: &mut Frame, area: Rect, state: &UiState) {
-    // Track viewport for hover (caller mutates via app after draw — use interior via unsafe? No:
-    // app updates last_body_* before draw).
     let Some(manifest) = &state.manifest else {
         let msg = Paragraph::new(vec![
             Line::from(Span::styled(
@@ -253,7 +426,7 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &UiState) {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "Waiting for RENDER_MANIFEST…",
+                "Waiting for RENDER_MANIFEST\u{2026}",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::raw(format!("session={}", state.session_id))),
@@ -389,9 +562,11 @@ fn mode_hint(state: &UiState) -> String {
         NavMode::Idle => "i browse · Tab focus · ↑↓ widget · PgUp/Dn page · q".into(),
         NavMode::Browse => format!("↑↓ page · Enter open · Esc idle · hover={hover_id}"),
         NavMode::TableInteract { .. } => "↑↓ row · Enter open · Esc back".into(),
-        NavMode::AwaitDetail { .. } => "waiting for detail…".into(),
-        NavMode::DetailScreen { .. } => "Esc back to board · q quit".into(),
-        NavMode::AwaitBoard { .. } => "waiting for board…".into(),
+        NavMode::AwaitDetail { .. } => "waiting for detail\u{2026}".into(),
+        NavMode::DetailScreen { .. } => "i cmd · Esc board · q quit".into(),
+        NavMode::CommandInsert { .. } => "type /details · Enter · Esc cancel".into(),
+        NavMode::AwaitEnrich { .. } => "request in flight · q quit".into(),
+        NavMode::AwaitBoard { .. } => "waiting for board\u{2026}".into(),
     }
 }
 
@@ -421,7 +596,10 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &UiState) {
         NavMode::Browse => Color::Yellow,
         NavMode::TableInteract { .. } => Color::Yellow,
         NavMode::DetailScreen { .. } => Color::Magenta,
-        NavMode::AwaitDetail { .. } | NavMode::AwaitBoard { .. } => Color::Yellow,
+        NavMode::CommandInsert { .. } => Color::Yellow,
+        NavMode::AwaitDetail { .. }
+        | NavMode::AwaitBoard { .. }
+        | NavMode::AwaitEnrich { .. } => Color::Yellow,
     };
     let line = Line::from(vec![
         Span::styled(" TUI ", Style::default().bg(Color::Cyan).fg(Color::Black)),
@@ -452,7 +630,6 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &UiState) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// Called from app each frame before draw to sync viewport size used by hover.
 pub fn sync_viewport(state: &mut UiState, body_w: u16, body_h: u16) {
     let changed = state.last_body_w != body_w || state.last_body_h != body_h;
     state.last_body_w = body_w;
