@@ -141,7 +141,9 @@ pub fn on_manifest_received(mode: &mut crate::nav::NavMode, manifest: &TuiManife
         NavMode::AwaitBoard { .. } => {
             *mode = NavMode::Browse;
         }
-        NavMode::DetailScreen { .. } | NavMode::PromptInsert { .. } => {
+        NavMode::DetailScreen { .. }
+        | NavMode::DetailBrowse { .. }
+        | NavMode::PromptInsert { .. } => {
             if !is_detail {
                 *mode = NavMode::Browse;
             } else if let NavMode::PromptInsert { from_widget, .. } = mode {
@@ -219,6 +221,15 @@ mod tests {
     #[test]
     fn board_while_on_detail_returns_to_browse() {
         let mut mode = NavMode::DetailScreen {
+            from_widget: "w_table".into(),
+        };
+        on_manifest_received(&mut mode, &dummy_manifest());
+        assert_eq!(mode, NavMode::Browse);
+    }
+
+    #[test]
+    fn board_while_on_detail_browse_returns_to_browse() {
+        let mut mode = NavMode::DetailBrowse {
             from_widget: "w_table".into(),
         };
         on_manifest_received(&mut mode, &dummy_manifest());

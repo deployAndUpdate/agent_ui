@@ -64,14 +64,15 @@ Optional: `title`
 
 ## TUI navigation
 
-Modes: `Idle` → `i` → `Browse` → `Enter` on Table → `TableInteract` → `Enter` on row → stub detail → auto `/details` → `Tab` focus → `p` prompt → `Esc` back.
+Modes: `Idle` → `i` → `Browse` → `Enter` on Table → `TableInteract` → `Enter` on row → stub detail → auto `/details` (cached on later visits) → `i` browse on detail → `Tab` / `p` → `Esc` back.
 
 | Mode | Keys | UI |
 |------|------|-----|
 | Idle | `i` browse; Tab/`[` `]` focus; ↑↓/`jk` widget scroll; PgUp/PgDn page; `q` quit | cyan Tab focus |
 | Browse | ↑↓ = page (±5, same as PgUp/PgDn); Enter open Table; Esc → Idle | yellow hover |
 | Table | ↑↓/`jk` row; Enter → `select_row`; Esc → Browse | yellow border + row |
-| Detail | Tab/`[` `]` focus; `p` prompt; Esc → `navigate_back`; `q` quit | cyan Tab focus on chunk |
+| Detail | `i` browse; Tab/`[` `]` focus; `p` prompt; Esc → `navigate_back`; `q` quit | cyan Tab focus |
+| DetailBrowse | ↑↓ page (yellow hover); `p` prompt; Esc → Detail | yellow hover |
 | Prompt | type; Enter send; Esc cancel (`q` is a letter) | overlay text box |
 | AwaitEnrich | wait for agent SYNC | overlay spinner |
 
@@ -86,7 +87,7 @@ POST /api/v1/tui/manifest
 { "sessionId": "<same>", "manifest": { "taskId": "detail_…", "operation": "SYNC_DASHBOARD", "layout": { ... } } }
 ```
 
-Keep `taskId` prefix `detail_` so the TUI stays on DetailScreen. Backend treats `detail_*` POSTs as **ephemeral** (outbox only; session board unchanged).
+Keep `taskId` prefix `detail_` so the TUI stays on DetailScreen. Backend treats `detail_*` POSTs as **ephemeral** (outbox only; session board unchanged). The TUI caches the enriched board per table row (`widgetId:row`); reopening that row shows the cache and does not re-send `/details`. `/prompt` updates the cache.
 
 ## Prompt command `/prompt`
 

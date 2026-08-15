@@ -12,7 +12,10 @@ use crate::content_measure::allocated_height;
 use crate::layout_chunks::constraints_from_chunks;
 use crate::loader::{ring_lines, spinner_frame, status_phrase};
 use crate::model::{TuiChunk, TuiManifest, WsStatus};
-use crate::nav::{hover_from_viewport, should_auto_details, table_row_count, NavMode, PAGE_STEP};
+use crate::nav::{
+    detail_cache_key, hover_from_viewport, should_auto_details, table_row_count, NavMode,
+    PAGE_STEP,
+};
 use crate::widgets_render::{render_chunk, ChunkRenderOpts};
 
 pub struct UiState {
@@ -34,6 +37,8 @@ pub struct UiState {
     pending_auto_details: bool,
     /// Cyan Tab-focus is armed only after Tab/[ / ] on the detail board.
     pub detail_focus: bool,
+    /// Enriched detail boards keyed by `widgetId:row`.
+    detail_cache: HashMap<String, TuiManifest>,
 }
 
 impl UiState {
@@ -54,6 +59,7 @@ impl UiState {
             details_auto_sent: false,
             pending_auto_details: false,
             detail_focus: false,
+            detail_cache: HashMap::new(),
         }
     }
 
@@ -67,13 +73,17 @@ impl UiState {
             NavMode::Idle
                 | NavMode::Browse
                 | NavMode::DetailScreen { .. }
+                | NavMode::DetailBrowse { .. }
                 | NavMode::TableInteract { .. }
         );
         self.manifest = Some(manifest);
         if reset_view {
             if matches!(
                 self.nav,
-                NavMode::Idle | NavMode::Browse | NavMode::DetailScreen { .. }
+                NavMode::Idle
+                    | NavMode::Browse
+                    | NavMode::DetailScreen { .. }
+                    | NavMode::DetailBrowse { .. }
             ) {
                 self.page_scroll = 0;
                 self.widget_scroll.clear();
@@ -82,7 +92,7 @@ impl UiState {
                 self.focus = 0;
                 self.hover = 0;
             }
-            if matches!(self.nav, NavMode::DetailScreen { .. })
+            if matches!(self.nav, NavMode::DetailScreen { .. } | NavMode::DetailBrowse { .. })
                 && matches!(before, NavMode::AwaitDetail { .. } | NavMode::AwaitEnrich { .. })
             {
                 self.focus = 0;
@@ -93,6 +103,19 @@ impl UiState {
             self.detail_ctx = None;
             self.details_auto_sent = false;
             self.detail_focus = false;
+        }
+        if matches!(
+            before,
+            NavMode::AwaitEnrich { .. }
+                | NavMode::PromptInsert { .. }
+                | NavMode::DetailScreen { .. }
+                | NavMode::DetailBrowse { .. }
+        ) {
+            if let Some(m) = &self.manifest {
+                if m.task_id.starts_with("detail_") {
+                    self.remember_detail(m.clone());
+                }
+            }
         }
         if !matches!(self.nav, NavMode::AwaitEnrich { .. }) {
             self.wait_started = None;
@@ -109,6 +132,7 @@ impl UiState {
     pub fn enter_await_enrich(&mut self, command: &str) {
         let from_widget = match &self.nav {
             NavMode::DetailScreen { from_widget }
+            | NavMode::DetailBrowse { from_widget }
             | NavMode::AwaitEnrich { from_widget, .. }
             | NavMode::PromptInsert { from_widget, .. } => from_widget.clone(),
             NavMode::AwaitDetail { widget_id, .. } => widget_id.clone(),
@@ -124,29 +148,85 @@ impl UiState {
         }
     }
 
+    pub fn remember_detail(&mut self, manifest: TuiManifest) {
+        let Some(ctx) = &self.detail_ctx else {
+            return;
+        };
+        if !manifest.task_id.starts_with("detail_") {
+            return;
+        }
+        let key = detail_cache_key(&ctx.source_widget_id, ctx.row_index.unwrap_or(0));
+        self.detail_cache.insert(key, manifest);
+    }
+
+    pub fn cached_detail(&self, widget_id: &str, row: usize) -> Option<TuiManifest> {
+        self.detail_cache
+            .get(&detail_cache_key(widget_id, row))
+            .cloned()
+    }
+
+    pub fn show_cached_detail(&mut self, widget_id: String, manifest: TuiManifest) {
+        self.details_auto_sent = true;
+        self.pending_auto_details = false;
+        self.page_scroll = 0;
+        self.widget_scroll.clear();
+        self.focus = 0;
+        self.detail_focus = false;
+        self.nav = NavMode::DetailScreen {
+            from_widget: widget_id,
+        };
+        self.manifest = Some(manifest);
+        self.wait_started = None;
+        self.recompute_hover();
+    }
+
+    pub fn enter_detail_browse(&mut self) {
+        let from_widget = match &self.nav {
+            NavMode::DetailScreen { from_widget }
+            | NavMode::DetailBrowse { from_widget } => from_widget.clone(),
+            _ => String::new(),
+        };
+        self.nav = NavMode::DetailBrowse { from_widget };
+        self.recompute_hover();
+    }
+
+    pub fn leave_detail_browse(&mut self) {
+        if let NavMode::DetailBrowse { from_widget } = &self.nav {
+            let from_widget = from_widget.clone();
+            self.nav = NavMode::DetailScreen { from_widget };
+        }
+    }
+
     pub fn current_detail_json(&self) -> Option<serde_json::Value> {
         serde_json::to_value(self.manifest.as_ref()?).ok()
     }
 
     pub fn focused_widget_id(&self) -> Option<String> {
-        if !self.detail_focus {
-            return None;
+        if self.detail_focus {
+            let idx = self.focused_chunk_index()?;
+            return self
+                .manifest
+                .as_ref()?
+                .layout
+                .chunks
+                .get(idx)
+                .map(|c| c.widget_id.clone());
         }
-        let idx = self.focused_chunk_index()?;
-        self.manifest
-            .as_ref()?
-            .layout
-            .chunks
-            .get(idx)
-            .map(|c| c.widget_id.clone())
+        if matches!(self.nav, NavMode::DetailBrowse { .. }) {
+            return self.hovered_chunk().map(|c| c.widget_id.clone());
+        }
+        None
     }
 
     pub fn focused_chunk_json(&self) -> Option<serde_json::Value> {
-        if !self.detail_focus {
+        let c = if self.detail_focus {
+            let idx = self.focused_chunk_index()?;
+            self.manifest.as_ref()?.layout.chunks.get(idx)?
+        } else if matches!(self.nav, NavMode::DetailBrowse { .. }) {
+            self.hovered_chunk()?
+        } else {
             return None;
-        }
-        let idx = self.focused_chunk_index()?;
-        let c = self.manifest.as_ref()?.layout.chunks.get(idx)?;
+        };
         Some(serde_json::json!({
             "widgetId": c.widget_id,
             "type": c.widget_type,
@@ -197,13 +277,20 @@ impl UiState {
         if n == 0 {
             return;
         }
-        if matches!(self.nav, NavMode::DetailScreen { .. }) && !self.detail_focus {
+        if matches!(
+            self.nav,
+            NavMode::DetailScreen { .. } | NavMode::DetailBrowse { .. }
+        ) && !self.detail_focus
+        {
             self.detail_focus = true;
             self.focus = 0;
             return;
         }
         self.focus = (self.focus + 1) % n;
-        if matches!(self.nav, NavMode::DetailScreen { .. }) {
+        if matches!(
+            self.nav,
+            NavMode::DetailScreen { .. } | NavMode::DetailBrowse { .. }
+        ) {
             self.detail_focus = true;
         }
     }
@@ -213,19 +300,31 @@ impl UiState {
         if n == 0 {
             return;
         }
-        if matches!(self.nav, NavMode::DetailScreen { .. }) && !self.detail_focus {
+        if matches!(
+            self.nav,
+            NavMode::DetailScreen { .. } | NavMode::DetailBrowse { .. }
+        ) && !self.detail_focus
+        {
             self.detail_focus = true;
             self.focus = n - 1;
             return;
         }
         self.focus = (self.focus + n - 1) % n;
-        if matches!(self.nav, NavMode::DetailScreen { .. }) {
+        if matches!(
+            self.nav,
+            NavMode::DetailScreen { .. } | NavMode::DetailBrowse { .. }
+        ) {
             self.detail_focus = true;
         }
     }
 
     pub fn scroll_focused(&mut self, delta: i32) {
-        let Some(idx) = self.focused_chunk_index() else {
+        let idx = if matches!(self.nav, NavMode::DetailBrowse { .. }) && !self.detail_focus {
+            self.hover_chunk_index()
+        } else {
+            self.focused_chunk_index()
+        };
+        let Some(idx) = idx else {
             return;
         };
         let id = self
@@ -326,7 +425,8 @@ impl UiState {
 
     pub fn open_prompt_insert(&mut self) {
         let from_widget = match &self.nav {
-            NavMode::DetailScreen { from_widget } => from_widget.clone(),
+            NavMode::DetailScreen { from_widget }
+            | NavMode::DetailBrowse { from_widget } => from_widget.clone(),
             _ => String::new(),
         };
         self.nav = NavMode::PromptInsert {
@@ -560,11 +660,16 @@ fn draw_body(frame: &mut Frame, area: Rect, state: &UiState) {
 fn chunk_opts(state: &UiState, chunk_index: usize, chunk: &TuiChunk) -> ChunkRenderOpts {
     let scroll = *state.widget_scroll.get(&chunk.widget_id).unwrap_or(&0);
     let idle_focused = (matches!(state.nav, NavMode::Idle)
-        || (matches!(state.nav, NavMode::DetailScreen { .. }) && state.detail_focus))
+        || (matches!(
+            state.nav,
+            NavMode::DetailScreen { .. } | NavMode::DetailBrowse { .. }
+        ) && state.detail_focus))
         && state.focused_chunk_index() == Some(chunk_index);
 
     let yellow = match &state.nav {
-        NavMode::Browse => state.hover_chunk_index() == Some(chunk_index),
+        NavMode::Browse | NavMode::DetailBrowse { .. } => {
+            state.hover_chunk_index() == Some(chunk_index)
+        }
         NavMode::TableInteract { widget_id, .. }
         | NavMode::AwaitDetail { widget_id, .. } => widget_id == &chunk.widget_id,
         _ => false,
@@ -663,7 +768,10 @@ fn mode_hint(state: &UiState) -> String {
         NavMode::Browse => format!("↑↓ page · Enter open · Esc idle · hover={hover_id}"),
         NavMode::TableInteract { .. } => "↑↓ row · Enter open · Esc back".into(),
         NavMode::AwaitDetail { .. } => "waiting for detail\u{2026}".into(),
-        NavMode::DetailScreen { .. } => "Tab focus · p prompt · Esc board · q quit".into(),
+        NavMode::DetailScreen { .. } => "i browse · Tab focus · p prompt · Esc board".into(),
+        NavMode::DetailBrowse { .. } => {
+            format!("↑↓ page · p prompt · Esc detail · hover={hover_id}")
+        }
         NavMode::PromptInsert { .. } => "type prompt · Enter send · Esc cancel".into(),
         NavMode::AwaitEnrich { .. } => "request in flight · q quit".into(),
         NavMode::AwaitBoard { .. } => "waiting for board\u{2026}".into(),
@@ -696,6 +804,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &UiState) {
         NavMode::Browse => Color::Yellow,
         NavMode::TableInteract { .. } => Color::Yellow,
         NavMode::DetailScreen { .. } => Color::Magenta,
+        NavMode::DetailBrowse { .. } => Color::Yellow,
         NavMode::PromptInsert { .. } => Color::Yellow,
         NavMode::AwaitDetail { .. }
         | NavMode::AwaitBoard { .. }
@@ -738,4 +847,70 @@ pub fn sync_viewport(state: &mut UiState, body_w: u16, body_h: u16) {
         state.recompute_hover();
     }
     let _ = PAGE_STEP;
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::action::DetailCtx;
+    use crate::model::{TuiChunk, TuiLayout, TuiManifest};
+    use serde_json::json;
+
+    fn para(text: &str) -> TuiManifest {
+        TuiManifest {
+            task_id: "detail_w_t_0".into(),
+            operation: "SYNC_DASHBOARD".into(),
+            layout: TuiLayout {
+                direction: "vertical".into(),
+                chunks: vec![TuiChunk {
+                    widget_id: "w_body".into(),
+                    widget_type: "Paragraph".into(),
+                    size: 4,
+                    props: json!({ "text": text }),
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn does_not_cache_builtin_stub() {
+        let mut s = UiState::new("demo".into());
+        s.detail_ctx = Some(DetailCtx {
+            source_widget_id: "w_t".into(),
+            row_index: Some(0),
+            row: vec!["a".into()],
+        });
+        s.nav = NavMode::AwaitDetail {
+            widget_id: "w_t".into(),
+            row: 0,
+        };
+        s.set_manifest(para("stub"));
+        assert!(s.cached_detail("w_t", 0).is_none());
+    }
+
+    #[test]
+    fn caches_agent_enrich_and_shows_on_reopen() {
+        let mut s = UiState::new("demo".into());
+        s.detail_ctx = Some(DetailCtx {
+            source_widget_id: "w_t".into(),
+            row_index: Some(0),
+            row: vec!["a".into()],
+        });
+        s.nav = NavMode::AwaitEnrich {
+            from_widget: "w_t".into(),
+            command: "/details".into(),
+        };
+        s.set_manifest(para("enriched"));
+        let hit = s.cached_detail("w_t", 0).expect("cached");
+        assert_eq!(hit.layout.chunks[0].props["text"], "enriched");
+
+        s.show_cached_detail("w_t".into(), hit);
+        assert!(matches!(s.nav, NavMode::DetailScreen { .. }));
+        assert_eq!(
+            s.manifest.as_ref().unwrap().layout.chunks[0].props["text"],
+            "enriched"
+        );
+        assert!(s.details_auto_sent);
+        assert!(!s.consume_auto_details());
+    }
 }

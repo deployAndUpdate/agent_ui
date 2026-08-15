@@ -86,6 +86,7 @@ impl App {
     fn fire_command(&mut self, command: &str, user_prompt: Option<String>) {
         let from_widget = match &self.state.nav {
             NavMode::DetailScreen { from_widget }
+            | NavMode::DetailBrowse { from_widget }
             | NavMode::AwaitEnrich { from_widget, .. }
             | NavMode::PromptInsert { from_widget, .. } => from_widget.clone(),
             _ => String::new(),
@@ -126,7 +127,8 @@ impl App {
             NavMode::Idle => self.handle_idle_key(code, modifiers),
             NavMode::Browse => self.handle_browse_key(code, modifiers),
             NavMode::TableInteract { .. } => self.handle_table_key(code),
-            NavMode::DetailScreen { .. } => self.handle_detail_key(code),
+            NavMode::DetailScreen { .. } => self.handle_detail_key(code, modifiers),
+            NavMode::DetailBrowse { .. } => self.handle_detail_browse_key(code, modifiers),
             NavMode::PromptInsert { .. } => self.handle_prompt_key(code),
             NavMode::AwaitDetail { .. }
             | NavMode::AwaitBoard { .. }
@@ -235,6 +237,10 @@ impl App {
                         row_index: Some(row),
                         row: cells.clone(),
                     });
+                    if let Some(cached) = self.state.cached_detail(&widget_id, row) {
+                        self.state.show_cached_detail(widget_id, cached);
+                        return false;
+                    }
                     self.state.details_auto_sent = false;
                     let action =
                         UserAction::select_row(self.task_id(), widget_id.clone(), row, cells);
@@ -247,8 +253,11 @@ impl App {
         false
     }
 
-    fn handle_detail_key(&mut self, code: KeyCode) -> bool {
+    fn handle_detail_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         match code {
+            KeyCode::Char('i') => {
+                self.state.enter_detail_browse();
+            }
             KeyCode::Char('p') => {
                 self.state.open_prompt_insert();
             }
@@ -265,6 +274,61 @@ impl App {
             KeyCode::Char(']') => self.state.focus_next(),
             KeyCode::Char('j') | KeyCode::Down => self.state.scroll_focused(1),
             KeyCode::Char('k') | KeyCode::Up => self.state.scroll_focused(-1),
+            KeyCode::PageDown => {
+                let step = if modifiers.contains(KeyModifiers::SHIFT) {
+                    1
+                } else {
+                    PAGE_STEP
+                };
+                self.state.page_scroll_by(step as i32);
+            }
+            KeyCode::PageUp => {
+                let step = if modifiers.contains(KeyModifiers::SHIFT) {
+                    1
+                } else {
+                    PAGE_STEP
+                };
+                self.state.page_scroll_by(-(step as i32));
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn handle_detail_browse_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.state.leave_detail_browse();
+            }
+            KeyCode::Char('p') => {
+                self.state.open_prompt_insert();
+            }
+            KeyCode::Down | KeyCode::Up => {
+                let dir = if code == KeyCode::Down { 1 } else { -1 };
+                self.state.page_scroll_by(dir * PAGE_STEP as i32);
+            }
+            KeyCode::PageDown => {
+                let step = if modifiers.contains(KeyModifiers::SHIFT) {
+                    1
+                } else {
+                    PAGE_STEP
+                };
+                self.state.page_scroll_by(step as i32);
+            }
+            KeyCode::PageUp => {
+                let step = if modifiers.contains(KeyModifiers::SHIFT) {
+                    1
+                } else {
+                    PAGE_STEP
+                };
+                self.state.page_scroll_by(-(step as i32));
+            }
+            KeyCode::Tab => self.state.focus_next(),
+            KeyCode::BackTab => self.state.focus_prev(),
+            KeyCode::Char('j') => self.state.scroll_focused(1),
+            KeyCode::Char('k') => self.state.scroll_focused(-1),
+            KeyCode::Char('[') => self.state.focus_prev(),
+            KeyCode::Char(']') => self.state.focus_next(),
             _ => {}
         }
         false

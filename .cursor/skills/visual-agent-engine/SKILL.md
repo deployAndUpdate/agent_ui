@@ -127,7 +127,7 @@ Client or HTTP `POST /api/v1/tui/action`:
 
 For custom detail screens: listen for `select_row`, then `SYNC_DASHBOARD` with your own chunks; handle `navigate_back` the same way or leave builtin on.
 
-TUI keys (browse → table → Enter → auto `/details` → Tab + `p`): [reference.md](reference.md#tui-navigation).
+TUI keys (browse → table → Enter → auto `/details` → `i` + arrows on detail → `p`): [reference.md](reference.md#tui-navigation).
 
 ## Do / Don't
 

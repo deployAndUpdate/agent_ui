@@ -9,6 +9,8 @@ pub enum NavMode {
     TableInteract { widget_id: String, row: usize },
     AwaitDetail { widget_id: String, row: usize },
     DetailScreen { from_widget: String },
+    /// Browse-like yellow hover + arrow paging on the detail board (`i` from DetailScreen).
+    DetailBrowse { from_widget: String },
     PromptInsert {
         from_widget: String,
         focused_widget: Option<String>,
@@ -30,6 +32,7 @@ impl NavMode {
             Self::TableInteract { .. } => "table",
             Self::AwaitDetail { .. } => "await-detail",
             Self::DetailScreen { .. } => "detail",
+            Self::DetailBrowse { .. } => "detail-browse",
             Self::PromptInsert { .. } => "prompt",
             Self::AwaitEnrich { .. } => "await-enrich",
             Self::AwaitBoard { .. } => "await-board",
@@ -37,7 +40,7 @@ impl NavMode {
     }
 
     pub fn is_browse_like(&self) -> bool {
-        matches!(self, Self::Browse)
+        matches!(self, Self::Browse | Self::DetailBrowse { .. })
     }
 
     pub fn is_waiting(&self) -> bool {
@@ -68,6 +71,10 @@ impl NavMode {
 
 pub const PAGE_STEP: u16 = 5;
 pub const DETAILS_SYSTEM_PROMPT: &str = "more details";
+
+pub fn detail_cache_key(widget_id: &str, row: usize) -> String {
+    format!("{widget_id}:{row}")
+}
 
 /// After the builtin stub lands, send `/details` once (not on later agent callbacks).
 pub fn should_auto_details(before: &NavMode, after: &NavMode, already_sent: bool) -> bool {
@@ -170,6 +177,17 @@ mod tests {
             .label(),
             "prompt"
         );
+        assert_eq!(
+            NavMode::DetailBrowse {
+                from_widget: "w".into()
+            }
+            .label(),
+            "detail-browse"
+        );
+        assert!(NavMode::DetailBrowse {
+            from_widget: "w".into()
+        }
+        .is_browse_like());
     }
 
     #[test]
@@ -197,5 +215,10 @@ mod tests {
         };
         assert!(!should_auto_details(&enrich, &after_agent, true));
         assert!(!should_auto_details(&enrich, &after_agent, false));
+    }
+
+    #[test]
+    fn cache_key_is_stable() {
+        assert_eq!(detail_cache_key("w_table", 3), "w_table:3");
     }
 }
