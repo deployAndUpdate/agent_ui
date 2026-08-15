@@ -1,6 +1,55 @@
 import type { TuiManifest } from '@visual-engine/tui-shared';
 import { validateTuiManifest } from '@visual-engine/tui-shared';
 
+/**
+ * LLM JSON often has unary plus (`"size": +2`) and trailing commas.
+ * Strip those outside of strings so JSON.parse can succeed.
+ */
+export function repairLlmJson(text: string): string {
+  let out = '';
+  let inStr = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (inStr) {
+      out += c;
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (c === '\\') {
+        escape = true;
+        continue;
+      }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+      continue;
+    }
+    if (c === '+' && /[0-9]/.test(text[i + 1] ?? '')) {
+      continue;
+    }
+    if (c === ',') {
+      let j = i + 1;
+      while (j < text.length && /[ \t\r\n]/.test(text[j]!)) j += 1;
+      if (text[j] === '}' || text[j] === ']') continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+function parseJsonSlice(slice: string): unknown {
+  try {
+    return JSON.parse(slice);
+  } catch {
+    return JSON.parse(repairLlmJson(slice));
+  }
+}
+
 /** First `{...}` object (string-aware). Ignores trailing junk from agent CLIs. */
 function firstJsonObject(text: string): unknown {
   const start = text.indexOf('{');
@@ -32,7 +81,7 @@ function firstJsonObject(text: string): unknown {
     else if (c === '}') {
       depth -= 1;
       if (depth === 0) {
-        return JSON.parse(text.slice(start, i + 1));
+        return parseJsonSlice(text.slice(start, i + 1));
       }
     }
   }
@@ -44,7 +93,7 @@ export function extractJsonObject(text: string): unknown {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const candidate = fenced?.[1]?.trim() ?? text.trim();
   try {
-    return JSON.parse(candidate);
+    return parseJsonSlice(candidate);
   } catch {
     return firstJsonObject(candidate);
   }

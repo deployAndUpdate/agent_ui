@@ -21,7 +21,7 @@ git clone <repo> && cd visual_engine
 ./vae --demo
 ```
 
-Stop the backend with `./vae stop`.
+Stop backend + agent daemon with `./vae stop`.
 
 Push a manifest:
 

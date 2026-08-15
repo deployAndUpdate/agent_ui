@@ -4,7 +4,7 @@ Status of the packaging checklist.
 
 | Area | Status | Notes |
 |------|--------|-------|
-| **A** One-command | done | `./install`, `./vae`, `./vae --demo`, `./vae smoke` |
+| **A** One-command | done | `./install`, `./vae` (backend + agent daemon + TUI), `./vae --demo`, `./vae smoke` |
 | **B** Packaging | done | bins `vae-tui`, `visual-agent` / `vae-agent`; version `0.2.0` |
 | **C** Backend service | done | `/health`, `/ready`, graceful SIGTERM/SIGINT, prod auth gate |
 | **D** Data | done | memory default; Postgres via `DATABASE_URL` + `001_tui.sql` |

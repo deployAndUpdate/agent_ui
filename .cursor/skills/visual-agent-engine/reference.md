@@ -95,11 +95,12 @@ Keep `taskId` prefix `detail_` so the TUI stays on DetailScreen. Backend treats 
 Any agent that accepts the webhook JSON and POSTs `detail_*` to `callback.manifestUrl` works
 (Cursor, Claude Code, OpenCode, custom). Optional helper:
 
+`./vae` starts the daemon on `:9090`. Default driver `auto`: warm Cursor SDK (`Agent.create` + `send`) when `CURSOR_API_KEY` is set, otherwise in-process stub. Health: `GET http://127.0.0.1:9090/health`.
+
 ```bash
 export TUI_AGENT_WEBHOOK_URL=http://127.0.0.1:9090/agent
-# universal:
-TUI_BRIDGE_DRIVER=exec TUI_BRIDGE_COMMAND='node packages/tui-agent-bridge/examples/enrich-echo.mjs' npm run bridge
-# or forward to your HTTP agent:
+# optional overrides:
+# TUI_BRIDGE_DRIVER=exec TUI_BRIDGE_COMMAND='node packages/tui-agent-bridge/examples/enrich-echo.mjs' npm run bridge
 # TUI_BRIDGE_DRIVER=forward TUI_BRIDGE_FORWARD_URL=http://127.0.0.1:9100/enrich npm run bridge
 ```
 
@@ -140,8 +141,10 @@ Builtin detail board uses Paragraph chunks `w_detail_title` / `w_detail_body` / 
 | `TUI_WS_URL` | `ws://127.0.0.1:3001/api/v1/tui/stream?sessionId=demo` |
 | `TUI_SESSION_ID` | `demo` |
 | `TUI_ACTION_REACTOR` | `builtin` (`off` to disable select_row/navigate_back) |
-| `TUI_AGENT_WEBHOOK_URL` | — (required for `/details` command) |
+| `TUI_AGENT_WEBHOOK_URL` | `http://127.0.0.1:9090/agent` (`./vae` default) |
 | `TUI_AGENT_WEBHOOK_TOKEN` | — (optional Bearer) |
+| `TUI_BRIDGE_DRIVER` | `auto` (`sdk` if `CURSOR_API_KEY`, else `stub`) |
+| `CURSOR_API_KEY` | — (warm SDK daemon) |
 
 ## Endpoints
 

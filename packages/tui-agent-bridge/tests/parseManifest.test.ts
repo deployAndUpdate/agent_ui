@@ -50,6 +50,17 @@ describe('parseManifest', () => {
   it('takes first object when CLI appends extra JSON', () => {
     expect(extractJsonObject('{"a":1}{"b":2} leftover')).toEqual({ a: 1 });
   });
+
+  it('accepts unary plus on size (LLM JSON)', () => {
+    const raw =
+      '{"taskId":"detail_x","operation":"SYNC_DASHBOARD","layout":{"chunks":[{"widgetId":"a","type":"Paragraph","size":+2,"props":{"text":"hi"}}]}}';
+    const m = normalizeDetailManifest(raw, 'detail_fallback');
+    expect(m.layout.chunks[0]?.size).toBe(2);
+  });
+
+  it('strips trailing commas', () => {
+    expect(extractJsonObject('{"a":1,}')).toEqual({ a: 1 });
+  });
 });
 
 describe('stubEnrichManifest', () => {

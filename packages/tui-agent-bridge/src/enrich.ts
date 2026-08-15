@@ -8,12 +8,13 @@ export function buildEnrichPrompt(body: AgentWebhookBody): string {
     body.systemPrompt || 'more details',
     '',
     'You enrich a TUI detail screen for Visual Agent Engine.',
-    'Return ONLY a JSON TuiManifest (no markdown prose outside JSON).',
+    'Return ONLY strict JSON TuiManifest (no markdown, no comments, no trailing commas).',
     'Hard rules:',
     '- operation: "SYNC_DASHBOARD"',
     `- taskId MUST start with "detail_" (prefer "${body.taskId}")`,
     '- layout.chunks types ONLY: Paragraph | Table | List | Gauge | Chart',
-    '- chunk fields: widgetId, type, size (positive int), props',
+    '- chunk fields: widgetId, type, size, props',
+    '- size MUST be an unsigned integer with no plus sign: 2 not +2',
     '- Prefer Paragraph/List with concrete facts about the selected row',
     '',
     `sessionId: ${body.sessionId}`,
@@ -59,8 +60,57 @@ export function stubEnrichManifest(body: AgentWebhookBody): TuiManifest {
           size: 12,
           props: {
             title: 'More details',
-            text: `${body.systemPrompt || 'more details'}\n\n${lines}\n\n(Set TUI_BRIDGE_DRIVER=cli|sdk + CURSOR_API_KEY for real agent enrich)`,
+            text: `${body.systemPrompt || 'more details'}\n\n${lines}\n\n(Daemon driver=stub. Set CURSOR_API_KEY for SDK enrich, or TUI_BRIDGE_DRIVER=exec + TUI_BRIDGE_COMMAND.)`,
             style: 'cyan',
+          },
+        },
+        {
+          widgetId: 'w_detail_hint',
+          type: 'Paragraph',
+          size: 2,
+          props: {
+            title: 'Nav',
+            text: 'Esc → board',
+            style: 'white',
+          },
+        },
+      ],
+    },
+  };
+}
+
+/** Keep the TUI off AwaitEnrich when a daemon job fails. */
+export function errorEnrichManifest(
+  body: AgentWebhookBody,
+  message: string,
+): TuiManifest {
+  const taskId = body.taskId.startsWith('detail_')
+    ? body.taskId
+    : `detail_${body.widgetId}_${String(body.payload.rowIndex ?? 0)}`;
+  return {
+    taskId,
+    operation: 'SYNC_DASHBOARD',
+    layout: {
+      direction: 'vertical',
+      chunks: [
+        {
+          widgetId: 'w_detail_title',
+          type: 'Paragraph',
+          size: 3,
+          props: {
+            title: `${body.widgetId} · agent error`,
+            text: String(body.command || '/details'),
+            style: 'red',
+          },
+        },
+        {
+          widgetId: 'w_detail_body',
+          type: 'Paragraph',
+          size: 12,
+          props: {
+            title: 'More details',
+            text: message.slice(0, 2000),
+            style: 'yellow',
           },
         },
         {

@@ -17,7 +17,7 @@ Never generate HTML/JS/React. Emit a **TuiManifest** JSON and submit it to the T
 From repo root `visual_engine`:
 
 1. `./install` (once) — Node, npm ci, release `vae-tui`
-2. Backend+TUI: `./vae` or `./vae --demo`
+2. Backend + agent daemon + TUI: `./vae` or `./vae --demo` (`GET http://127.0.0.1:9090/health`)`
 3. Auth (optional): `X-API-Key` / `VISUAL_ENGINE_API_KEY` when `AUTH_ENABLED=true`
 
 ## Workflow (always)
@@ -143,5 +143,5 @@ TUI keys (browse → table → detail → `/details`): [reference.md](reference.
 - Client: `tui/` (Ratatui)
 - Reactor: `backend/src/tui/actions/reactToUserAction.ts`
 - Webhook: `backend/src/tui/actions/agentWebhook.ts`
-- Bridge: `packages/tui-agent-bridge` (`npm run bridge`)
+- Daemon: `packages/tui-agent-bridge` — `./vae` starts it (`npm run bridge`); `/details` uses a warm SDK agent when `CURSOR_API_KEY` is set
 - Spec: `docs/TECHNICAL_SPEC.md`

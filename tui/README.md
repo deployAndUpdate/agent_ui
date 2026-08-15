@@ -2,7 +2,7 @@
 
 ```bash
 ./install                 # builds release binary
-./vae --demo              # backend + hello manifest + TUI
+./vae --demo              # backend + agent daemon + hello manifest + TUI
 # or
 cargo install --path tui  # installs `vae-tui` to cargo bin
 ```
