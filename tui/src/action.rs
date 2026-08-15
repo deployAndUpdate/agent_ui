@@ -2,7 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::model::TuiManifest;
-use crate::nav::DETAILS_SYSTEM_PROMPT;
+use crate::nav::{PromptScope, DETAILS_SYSTEM_PROMPT};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +27,7 @@ pub struct CommandMeta {
     pub focused_widget_id: Option<String>,
     pub focused_chunk: Option<Value>,
     pub current_detail: Option<Value>,
+    pub scope: PromptScope,
 }
 
 impl UserAction {
@@ -83,6 +84,8 @@ impl UserAction {
             if command == "/prompt" {
                 obj.insert("userPrompt".into(), Value::String(user_prompt.to_string()));
             }
+            let scope = meta.map(|m| m.scope).unwrap_or(PromptScope::Detail);
+            obj.insert("scope".into(), Value::String(scope.as_str().into()));
             if let Some(ctx) = detail_ctx {
                 obj.insert(
                     "rowIndex".into(),
@@ -131,8 +134,21 @@ pub fn on_manifest_received(mode: &mut crate::nav::NavMode, manifest: &TuiManife
                 from_widget: widget_id.clone(),
             };
         }
-        NavMode::AwaitEnrich { from_widget, .. } => {
-            if is_detail {
+        NavMode::AwaitEnrich {
+            from_widget,
+            scope,
+            resume_browse,
+            ..
+        } => {
+            if *scope == PromptScope::Board {
+                if !is_detail {
+                    *mode = if *resume_browse {
+                        NavMode::Browse
+                    } else {
+                        NavMode::Idle
+                    };
+                }
+            } else if is_detail {
                 *mode = NavMode::DetailScreen {
                     from_widget: from_widget.clone(),
                 };
@@ -146,9 +162,23 @@ pub fn on_manifest_received(mode: &mut crate::nav::NavMode, manifest: &TuiManife
         | NavMode::PromptInsert { .. } => {
             if !is_detail {
                 *mode = NavMode::Browse;
-            } else if let NavMode::PromptInsert { from_widget, .. } = mode {
-                let fw = from_widget.clone();
-                *mode = NavMode::DetailScreen { from_widget: fw };
+            } else if let NavMode::PromptInsert {
+                from_widget,
+                scope,
+                resume_browse,
+                ..
+            } = mode
+            {
+                if *scope == PromptScope::Board {
+                    *mode = if *resume_browse {
+                        NavMode::Browse
+                    } else {
+                        NavMode::Idle
+                    };
+                } else {
+                    let fw = from_widget.clone();
+                    *mode = NavMode::DetailScreen { from_widget: fw };
+                }
             }
         }
         NavMode::Idle | NavMode::Browse | NavMode::TableInteract { .. } => {
@@ -166,8 +196,8 @@ pub fn on_manifest_received(mode: &mut crate::nav::NavMode, manifest: &TuiManife
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nav::{should_auto_details, NavMode};
     use crate::model::TuiManifest;
+    use crate::nav::{should_auto_details, NavMode};
 
     fn dummy_manifest() -> TuiManifest {
         TuiManifest {
@@ -241,6 +271,8 @@ mod tests {
         let mut mode = NavMode::AwaitEnrich {
             from_widget: "w_table".into(),
             command: "/details".into(),
+            scope: PromptScope::Detail,
+            resume_browse: false,
         };
         let mut m = dummy_manifest();
         m.task_id = "detail_w_table_0".into();
@@ -251,6 +283,45 @@ mod tests {
                 from_widget: "w_table".into()
             }
         );
+    }
+
+    #[test]
+    fn await_enrich_board_restores_idle() {
+        let mut mode = NavMode::AwaitEnrich {
+            from_widget: String::new(),
+            command: "/prompt".into(),
+            scope: PromptScope::Board,
+            resume_browse: false,
+        };
+        on_manifest_received(&mut mode, &dummy_manifest());
+        assert_eq!(mode, NavMode::Idle);
+    }
+
+    #[test]
+    fn await_enrich_board_restores_browse() {
+        let mut mode = NavMode::AwaitEnrich {
+            from_widget: String::new(),
+            command: "/prompt".into(),
+            scope: PromptScope::Board,
+            resume_browse: true,
+        };
+        on_manifest_received(&mut mode, &dummy_manifest());
+        assert_eq!(mode, NavMode::Browse);
+    }
+
+    #[test]
+    fn await_enrich_board_ignores_detail_manifest() {
+        let enrich = NavMode::AwaitEnrich {
+            from_widget: String::new(),
+            command: "/prompt".into(),
+            scope: PromptScope::Board,
+            resume_browse: false,
+        };
+        let mut mode = enrich.clone();
+        let mut m = dummy_manifest();
+        m.task_id = "detail_w_table_0".into();
+        on_manifest_received(&mut mode, &m);
+        assert_eq!(mode, enrich);
     }
 
     #[test]
@@ -291,6 +362,7 @@ mod tests {
                     "type": "Paragraph",
                 })),
                 current_detail: Some(serde_json::json!({ "taskId": "detail_w_1" })),
+                scope: PromptScope::Detail,
             }),
         );
         assert_eq!(a.payload["command"], "/prompt");
@@ -299,6 +371,30 @@ mod tests {
         assert_eq!(a.payload["focusedWidgetId"], "w_detail_body");
         assert_eq!(a.payload["focusedChunk"]["widgetId"], "w_detail_body");
         assert_eq!(a.payload["currentDetail"]["taskId"], "detail_w_1");
+        assert_eq!(a.payload["scope"], "detail");
+    }
+
+    #[test]
+    fn board_prompt_payload_keeps_session_task_and_board_scope() {
+        let a = UserAction::command(
+            "task_7749",
+            "w_header",
+            "/prompt",
+            None,
+            Some(&CommandMeta {
+                user_prompt: Some("add a list".into()),
+                focused_widget_id: Some("w_header".into()),
+                focused_chunk: Some(serde_json::json!({
+                    "widgetId": "w_header",
+                    "type": "Paragraph",
+                })),
+                current_detail: Some(serde_json::json!({ "taskId": "task_7749" })),
+                scope: PromptScope::Board,
+            }),
+        );
+        assert_eq!(a.task_id, "task_7749");
+        assert_eq!(a.payload["scope"], "board");
+        assert!(!a.task_id.starts_with("detail_"));
     }
 
     #[test]

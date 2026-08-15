@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::action::{CommandMeta, DetailCtx, UserAction};
 use crate::model::{ServerEvent, WsStatus};
-use crate::nav::{table_row_cells, NavMode, PAGE_STEP};
+use crate::nav::{table_row_cells, NavMode, PromptScope, PAGE_STEP};
 use crate::net::spawn_ws_client;
 use crate::ui::{draw, sync_viewport, UiState};
 
@@ -76,7 +76,12 @@ impl App {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| {
                 if fallback.is_empty() {
-                    "w_detail_body".into()
+                    self.state
+                        .manifest
+                        .as_ref()
+                        .and_then(|m| m.layout.chunks.first())
+                        .map(|c| c.widget_id.clone())
+                        .unwrap_or_else(|| "board".into())
                 } else {
                     fallback.to_string()
                 }
@@ -92,11 +97,21 @@ impl App {
             _ => String::new(),
         };
         let widget_id = self.command_widget_id(&from_widget);
+        let scope = match &self.state.nav {
+            NavMode::PromptInsert { scope, .. } | NavMode::AwaitEnrich { scope, .. } => *scope,
+            NavMode::Idle | NavMode::Browse => PromptScope::Board,
+            _ => PromptScope::Detail,
+        };
+        let focused_widget_id = match &self.state.nav {
+            NavMode::PromptInsert { focused_widget, .. } => focused_widget.clone(),
+            _ => self.state.focused_widget_id(),
+        };
         let meta = CommandMeta {
             user_prompt,
-            focused_widget_id: self.state.focused_widget_id(),
+            focused_widget_id,
             focused_chunk: self.state.focused_chunk_json(),
             current_detail: self.state.current_detail_json(),
+            scope,
         };
         let action = UserAction::command(
             self.task_id(),
@@ -141,6 +156,9 @@ impl App {
             KeyCode::Char('i') => {
                 self.state.enter_browse();
             }
+            KeyCode::Char('p') => {
+                self.state.open_prompt_insert();
+            }
             KeyCode::Esc => {}
             KeyCode::Tab => self.state.focus_next(),
             KeyCode::BackTab => self.state.focus_prev(),
@@ -173,6 +191,9 @@ impl App {
         match code {
             KeyCode::Esc => {
                 self.state.nav = NavMode::Idle;
+            }
+            KeyCode::Char('p') => {
+                self.state.open_prompt_insert();
             }
             KeyCode::Enter => {
                 self.state.try_activate_hovered();
@@ -264,7 +285,10 @@ impl App {
             KeyCode::Esc => {
                 if let NavMode::DetailScreen { from_widget } = &self.state.nav {
                     let from_widget = from_widget.clone();
-                    self.send_action(UserAction::navigate_back(self.task_id(), from_widget.clone()));
+                    self.send_action(UserAction::navigate_back(
+                        self.task_id(),
+                        from_widget.clone(),
+                    ));
                     self.state.nav = NavMode::AwaitBoard { from_widget };
                 }
             }

@@ -55,4 +55,17 @@ describe('DaemonRuntime', () => {
     expect(m.taskId.startsWith('detail_')).toBe(true);
     expect(m.layout.chunks[1]?.props).toMatchObject({ text: 'boom' });
   });
+
+  it('board prompt error keeps session taskId', () => {
+    const m = errorEnrichManifest(
+      {
+        ...body,
+        command: '/prompt',
+        taskId: 'task_7749',
+        payload: { scope: 'board', userPrompt: 'x' },
+      },
+      'boom',
+    );
+    expect(m.taskId).toBe('task_7749');
+  });
 });

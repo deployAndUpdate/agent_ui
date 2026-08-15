@@ -80,6 +80,29 @@ describe('parseManifest', () => {
     expect(m.taskId).toBe('detail_w_x_0');
     expect(m.layout.chunks[0]?.widgetId).toBe('w_extra');
   });
+
+  it('normalizePatchManifest board keeps session taskId', async () => {
+    const { normalizePatchManifest } = await import('../src/parseManifest.js');
+    const m = normalizePatchManifest(
+      JSON.stringify({
+        taskId: 'detail_should_not_win',
+        operation: 'SYNC_DASHBOARD',
+        layout: {
+          chunks: [
+            {
+              widgetId: 'w_extra',
+              type: 'Paragraph',
+              size: 3,
+              props: { text: 'hi' },
+            },
+          ],
+        },
+      }),
+      'task_7749',
+      { forceDetail: false },
+    );
+    expect(m.taskId).toBe('task_7749');
+  });
 });
 
 describe('stubEnrichManifest', () => {

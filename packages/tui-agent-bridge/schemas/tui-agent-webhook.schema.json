@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://visual-engine.local/schemas/tui-agent-webhook.json",
   "title": "TUI Agent Webhook (/details, /prompt)",
-  "description": "Universal contract: Visual Engine POSTs this to TUI_AGENT_WEBHOOK_URL. Any agent must eventually POST a TuiManifest with taskId detail_* to callback.manifestUrl. /prompt patches are merged into the current detail board.",
+  "description": "Universal contract: Visual Engine POSTs this to TUI_AGENT_WEBHOOK_URL. Callback POST { sessionId, manifest }. detail_* taskId is ephemeral; other taskIds persist the session board. /prompt patches merge into payload.currentDetail.",
   "type": "object",
   "required": [
     "systemPrompt",
@@ -17,7 +17,7 @@
     "systemPrompt": { "type": "string" },
     "command": { "type": "string", "enum": ["/details", "/prompt"] },
     "sessionId": { "type": "string" },
-    "taskId": { "type": "string", "description": "Usually detail_<widgetId>_<rowIndex>" },
+    "taskId": { "type": "string", "description": "Session board id, or detail_<widgetId>_<rowIndex> for ephemeral detail" },
     "widgetId": { "type": "string" },
     "payload": {
       "type": "object",
@@ -30,7 +30,8 @@
         "userPrompt": { "type": "string" },
         "focusedWidgetId": { "type": "string" },
         "focusedChunk": { "type": "object" },
-        "currentDetail": {}
+        "currentDetail": {},
+        "scope": { "type": "string", "enum": ["board", "detail"] }
       },
       "additionalProperties": true
     },
@@ -42,7 +43,7 @@
         "manifestUrl": {
           "type": "string",
           "format": "uri",
-          "description": "POST { sessionId, manifest } here. detail_* is ephemeral."
+          "description": "POST { sessionId, manifest } here. detail_* is ephemeral; other ids persist."
         },
         "sessionId": { "type": "string" }
       }

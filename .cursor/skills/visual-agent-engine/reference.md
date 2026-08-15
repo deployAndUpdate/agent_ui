@@ -64,12 +64,12 @@ Optional: `title`
 
 ## TUI navigation
 
-Modes: `Idle` → `i` → `Browse` → `Enter` on Table → `TableInteract` → `Enter` on row → stub detail → auto `/details` (cached on later visits) → `i` browse on detail → `Tab` / `p` → `Esc` back.
+Modes: `Idle` (`p` prompt on the root board) → `i` → `Browse` (`p` prompt) → `Enter` on Table → `TableInteract` → `Enter` on row → stub detail → auto `/details` (cached on later visits) → `i` browse on detail → `Tab` / `p` → `Esc` back.
 
 | Mode | Keys | UI |
 |------|------|-----|
-| Idle | `i` browse; Tab/`[` `]` focus; ↑↓/`jk` widget scroll; PgUp/PgDn page; `q` quit | cyan Tab focus |
-| Browse | ↑↓ = page (±5, same as PgUp/PgDn); Enter open Table; Esc → Idle | yellow hover |
+| Idle | `i` browse; `p` prompt; Tab/`[` `]` focus; ↑↓/`jk` widget scroll; PgUp/PgDn page; `q` quit | cyan Tab focus |
+| Browse | ↑↓ = page (±5, same as PgUp/PgDn); `p` prompt; Enter open Table; Esc → Idle | yellow hover |
 | Table | ↑↓/`jk` row; Enter → `select_row`; Esc → Browse | yellow border + row |
 | Detail | `i` browse; Tab/`[` `]` focus; `p` prompt; Esc → `navigate_back`; `q` quit | cyan Tab focus |
 | DetailBrowse | ↑↓ page (yellow hover); `p` prompt; Esc → Detail | yellow hover |
@@ -87,18 +87,20 @@ POST /api/v1/tui/manifest
 { "sessionId": "<same>", "manifest": { "taskId": "detail_…", "operation": "SYNC_DASHBOARD", "layout": { ... } } }
 ```
 
-Keep `taskId` prefix `detail_` so the TUI stays on DetailScreen. Backend treats `detail_*` POSTs as **ephemeral** (outbox only; session board unchanged). The TUI caches the enriched board per table row (`widgetId:row`); reopening that row shows the cache and does not re-send `/details`. `/prompt` updates the cache.
+Keep `taskId` prefix `detail_` so the TUI stays on DetailScreen. Backend treats `detail_*` POSTs as **ephemeral** (outbox only; session board unchanged). The TUI caches the enriched board per table row (`widgetId:row`); reopening that row shows the cache and does not re-send `/details`. Detail `/prompt` updates the cache. Root-board `/prompt` is **not** cached as a detail overlay.
 
 ## Prompt command `/prompt`
 
-On DetailScreen: Tab to a widget (optional) → `p` → type → Enter.
+On the **root board** (Idle or Browse, not TableInteract): Tab or hover a widget (optional) → `p` → type → Enter. Payload `scope` is `"board"`. The daemon merges returned chunks into `payload.currentDetail` and callbacks with the **session `taskId`** (must **not** start with `detail_`), so `POST /manifest` persists the session board.
 
-Webhook `command` is `/prompt`. `systemPrompt` / `userPrompt` is the typed text. Payload includes `focusedWidgetId`, `focusedChunk`, `currentDetail` (the board on screen). The daemon merges returned chunks into that board (update same `widgetId`, append new ids) and callbacks `SYNC_DASHBOARD` with the same `detail_*` taskId.
+On **DetailScreen**: Tab to a widget (optional) → `p` → type → Enter. Payload `scope` is `"detail"`. The daemon merges into the current detail board and callbacks the same `detail_*` taskId (ephemeral).
+
+Webhook `command` is `/prompt`. `systemPrompt` / `userPrompt` is the typed text. Payload includes `scope`, `focusedWidgetId`, `focusedChunk`, `currentDetail` (the board on screen). Same-widgetId updates, new ids append.
 
 ### Local / universal agent bridge
 
-Any agent that accepts the webhook JSON and POSTs `detail_*` to `callback.manifestUrl` works
-(Cursor, Claude Code, OpenCode, custom). Optional helper:
+Any agent that accepts the webhook JSON and POSTs a TuiManifest to `callback.manifestUrl` works
+(Cursor, Claude Code, OpenCode, custom). Use `detail_*` for ephemeral detail overlays; other `taskId`s persist the root board. Optional helper:
 
 `./vae` starts the daemon on `:9090`. Default driver `auto`: warm Cursor SDK (`Agent.create` + `send`) when `CURSOR_API_KEY` is set, otherwise in-process stub. Health: `GET http://127.0.0.1:9090/health`.
 

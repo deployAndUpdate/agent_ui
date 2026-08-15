@@ -1,8 +1,6 @@
 //! Measure widget content to pick layout heights and table column widths.
 
-use crate::model::{
-    ListProps, ParagraphProps, TableProps, TuiChunk,
-};
+use crate::model::{ListProps, ParagraphProps, TableProps, TuiChunk};
 
 const BORDER: u16 = 2;
 

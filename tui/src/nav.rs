@@ -6,22 +6,38 @@ use crate::model::{TableProps, TuiChunk};
 pub enum NavMode {
     Idle,
     Browse,
-    TableInteract { widget_id: String, row: usize },
-    AwaitDetail { widget_id: String, row: usize },
-    DetailScreen { from_widget: String },
+    TableInteract {
+        widget_id: String,
+        row: usize,
+    },
+    AwaitDetail {
+        widget_id: String,
+        row: usize,
+    },
+    DetailScreen {
+        from_widget: String,
+    },
     /// Browse-like yellow hover + arrow paging on the detail board (`i` from DetailScreen).
-    DetailBrowse { from_widget: String },
+    DetailBrowse {
+        from_widget: String,
+    },
     PromptInsert {
         from_widget: String,
         focused_widget: Option<String>,
         buffer: String,
         error: Option<String>,
+        scope: PromptScope,
+        resume_browse: bool,
     },
     AwaitEnrich {
         from_widget: String,
         command: String,
+        scope: PromptScope,
+        resume_browse: bool,
     },
-    AwaitBoard { from_widget: String },
+    AwaitBoard {
+        from_widget: String,
+    },
 }
 
 impl NavMode {
@@ -66,6 +82,22 @@ impl NavMode {
 
     pub fn is_typing(&self) -> bool {
         matches!(self, Self::PromptInsert { .. })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PromptScope {
+    Board,
+    #[default]
+    Detail,
+}
+
+impl PromptScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Board => "board",
+            Self::Detail => "detail",
+        }
     }
 }
 
@@ -150,7 +182,11 @@ mod tests {
 
     #[test]
     fn hover_picks_top_visible() {
-        let chunks = vec![chunk("a", "Paragraph"), chunk("b", "Table"), chunk("c", "List")];
+        let chunks = vec![
+            chunk("a", "Paragraph"),
+            chunk("b", "Table"),
+            chunk("c", "List"),
+        ];
         let heights = vec![10u16, 10, 10];
         let idx = hover_from_viewport(&chunks, &heights, 10, 20);
         assert_eq!(idx, Some(1));
@@ -173,6 +209,8 @@ mod tests {
                 focused_widget: None,
                 buffer: "hello".into(),
                 error: None,
+                scope: PromptScope::Board,
+                resume_browse: false,
             }
             .label(),
             "prompt"
@@ -209,6 +247,8 @@ mod tests {
         let enrich = NavMode::AwaitEnrich {
             from_widget: "w_table".into(),
             command: "/details".into(),
+            scope: PromptScope::Detail,
+            resume_browse: false,
         };
         let after_agent = NavMode::DetailScreen {
             from_widget: "w_table".into(),

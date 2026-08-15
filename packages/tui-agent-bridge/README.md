@@ -6,10 +6,11 @@ Long-lived `/details` and `/prompt` adapter. `./vae` starts it on `127.0.0.1:909
 TUI /details or /prompt
   → POST TUI_AGENT_WEBHOOK_URL   (schema: schemas/tui-agent-webhook.schema.json)
   → this daemon (queue per sessionId)
-  → POST callback.manifestUrl    { sessionId, manifest }  (taskId must be detail_*)
+  → POST callback.manifestUrl    { sessionId, manifest }
+     detail_* = ephemeral overlay; other taskIds persist the session board
 ```
 
-`/prompt` patches are merged into `payload.currentDetail` (same widgetId updates, new ids append).
+`/prompt` patches merge into `payload.currentDetail`. `payload.scope=board` (or a non-`detail_*` `taskId`) keeps the session `taskId` so the root board is saved. Detail prompts stay on `detail_*`.
 
 ## Default driver (`auto`)
 
@@ -71,7 +72,7 @@ npm run bridge
 TUI_SESSION_ID=demo npm run dev:tui
 ```
 
-Table row Enter → auto `/details` overlay. On the filled detail: Tab focuses a widget, `p` opens a prompt box; the daemon merges the reply onto the detail board.
+Table row Enter → auto `/details` overlay. `p` on Idle/Browse patches the **root board** (persisted). On the detail screen, Tab focuses a widget, `p` opens a prompt box; the daemon merges the reply onto that detail board (ephemeral).
 
 ## Env
 

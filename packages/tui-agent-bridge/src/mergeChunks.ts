@@ -2,10 +2,40 @@ import type { TuiManifest } from '@visual-engine/tui-shared';
 import { validateTuiManifest } from '@visual-engine/tui-shared';
 import type { AgentWebhookBody } from './types.js';
 
-function asDetailManifest(raw: unknown, fallbackTaskId: string): TuiManifest | null {
+export type MergeOpts = { forceDetail?: boolean };
+
+/** Root-board `/prompt` (persisted). Detail `/prompt` stays ephemeral (`detail_*`). */
+export function isBoardPrompt(body: AgentWebhookBody): boolean {
+  if (body.payload.scope === 'board') return true;
+  return body.command.trim() === '/prompt' && !body.taskId.startsWith('detail_');
+}
+
+function keepBoardTaskId(candidate: string | undefined, fallback: string): string {
+  if (fallback && !fallback.startsWith('detail_')) return fallback;
+  if (candidate && !candidate.startsWith('detail_')) return candidate;
+  return fallback || candidate || 'board';
+}
+
+function detailTaskId(candidate: string | undefined, fallback: string): string {
+  if (candidate?.startsWith('detail_')) return candidate;
+  if (fallback.startsWith('detail_')) return fallback;
+  return `detail_${fallback}`;
+}
+
+function asCurrentManifest(
+  raw: unknown,
+  fallbackTaskId: string,
+  forceDetail: boolean,
+): TuiManifest | null {
   if (!raw || typeof raw !== 'object') return null;
   const v = validateTuiManifest(raw);
-  if (v.ok && v.data.taskId.startsWith('detail_')) return v.data;
+  if (v.ok) {
+    if (forceDetail) {
+      if (v.data.taskId.startsWith('detail_')) return v.data;
+    } else {
+      return { ...v.data, taskId: keepBoardTaskId(v.data.taskId, fallbackTaskId) };
+    }
+  }
   const o = raw as {
     taskId?: unknown;
     layout?: { direction?: string; chunks?: unknown };
@@ -17,12 +47,10 @@ function asDetailManifest(raw: unknown, fallbackTaskId: string): TuiManifest | n
       ? o.chunks
       : null;
   if (!chunks || chunks.length === 0) return null;
-  const taskId =
-    typeof o.taskId === 'string' && o.taskId.startsWith('detail_')
-      ? o.taskId
-      : fallbackTaskId.startsWith('detail_')
-        ? fallbackTaskId
-        : `detail_${fallbackTaskId}`;
+  const rawTask = typeof o.taskId === 'string' ? o.taskId : undefined;
+  const taskId = forceDetail
+    ? detailTaskId(rawTask, fallbackTaskId)
+    : keepBoardTaskId(rawTask, fallbackTaskId);
   const wrapped = {
     taskId,
     operation: 'SYNC_DASHBOARD' as const,
@@ -35,26 +63,30 @@ function asDetailManifest(raw: unknown, fallbackTaskId: string): TuiManifest | n
   return v2.ok ? v2.data : null;
 }
 
-/** Ephemeral detail currently on screen (TUI sends payload.currentDetail). */
-export function currentDetailFromBody(body: AgentWebhookBody): TuiManifest | null {
-  const fromPayload = asDetailManifest(
+/** Board currently on screen (TUI sends payload.currentDetail). */
+export function currentDetailFromBody(
+  body: AgentWebhookBody,
+  opts?: MergeOpts,
+): TuiManifest | null {
+  const forceDetail = opts?.forceDetail ?? !isBoardPrompt(body);
+  const fromPayload = asCurrentManifest(
     body.payload.currentDetail ?? body.payload.currentManifest,
     body.taskId,
+    forceDetail,
   );
   if (fromPayload) return fromPayload;
-  return asDetailManifest(body.currentManifest, body.taskId);
+  return asCurrentManifest(body.currentManifest, body.taskId, forceDetail);
 }
 
 /** Update matching widgetId, append new chunks. Keeps existing order. */
 export function mergeDetailChunks(
   current: TuiManifest | null,
   patch: TuiManifest,
+  forceDetail = true,
 ): TuiManifest {
-  const taskId = current?.taskId.startsWith('detail_')
-    ? current.taskId
-    : patch.taskId.startsWith('detail_')
-      ? patch.taskId
-      : `detail_${patch.taskId}`;
+  const taskId = forceDetail
+    ? detailTaskId(current?.taskId, patch.taskId)
+    : keepBoardTaskId(patch.taskId, current?.taskId ?? patch.taskId);
   if (!current || current.layout.chunks.length === 0) {
     return { ...patch, taskId, operation: 'SYNC_DASHBOARD' };
   }
@@ -80,15 +112,17 @@ export function stubPromptPatch(body: AgentWebhookBody): TuiManifest {
   const focused =
     typeof body.payload.focusedWidgetId === 'string'
       ? body.payload.focusedWidgetId
-      : 'detail';
+      : isBoardPrompt(body)
+        ? 'board'
+        : 'detail';
   const text =
     (typeof body.payload.userPrompt === 'string' && body.payload.userPrompt.trim()) ||
     body.systemPrompt.trim() ||
     '(prompt)';
   const slug = focused.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 40);
-  const taskId = body.taskId.startsWith('detail_')
-    ? body.taskId
-    : `detail_${body.widgetId}_${String(body.payload.rowIndex ?? 0)}`;
+  const taskId = isBoardPrompt(body)
+    ? keepBoardTaskId(undefined, body.taskId)
+    : detailTaskId(body.taskId, `detail_${body.widgetId}_${String(body.payload.rowIndex ?? 0)}`);
   return {
     taskId,
     operation: 'SYNC_DASHBOARD',

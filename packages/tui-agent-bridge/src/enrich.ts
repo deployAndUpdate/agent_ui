@@ -1,5 +1,6 @@
 import type { TuiManifest } from '@visual-engine/tui-shared';
 import type { AgentWebhookBody } from './types.js';
+import { isBoardPrompt } from './mergeChunks.js';
 
 export function buildEnrichPrompt(body: AgentWebhookBody): string {
   const row = body.payload.row;
@@ -35,13 +36,20 @@ export function buildPromptFollowUp(body: AgentWebhookBody): string {
     (typeof body.payload.userPrompt === 'string' && body.payload.userPrompt) ||
     body.systemPrompt ||
     '';
+  const board = isBoardPrompt(body);
+  const taskRule = board
+    ? `- taskId MUST be "${body.taskId}" and MUST NOT start with "detail_" (that prefix is ephemeral)`
+    : `- taskId MUST start with "detail_" (prefer "${body.taskId}")`;
+  const where = board
+    ? 'Follow-up prompt on the existing TUI root board (session dashboard).'
+    : 'Follow-up prompt on an existing TUI detail board.';
   return [
-    'Follow-up prompt on an existing TUI detail board.',
+    where,
     'Return ONLY strict JSON. Prefer a TuiManifest with ONLY new or updated layout.chunks.',
     'Do NOT repeat unchanged widgets. Do not wrap in markdown.',
     'Hard rules:',
     '- operation: "SYNC_DASHBOARD"',
-    `- taskId MUST start with "detail_" (prefer "${body.taskId}")`,
+    taskRule,
     '- chunk types ONLY: Paragraph | Table | List | Gauge | Chart',
     '- size: unsigned integer, no plus sign (2 not +2)',
     '- New widgetId values must be unique; reuse an id to UPDATE that widget',
@@ -113,9 +121,11 @@ export function errorEnrichManifest(
   body: AgentWebhookBody,
   message: string,
 ): TuiManifest {
-  const taskId = body.taskId.startsWith('detail_')
+  const taskId = isBoardPrompt(body)
     ? body.taskId
-    : `detail_${body.widgetId}_${String(body.payload.rowIndex ?? 0)}`;
+    : body.taskId.startsWith('detail_')
+      ? body.taskId
+      : `detail_${body.widgetId}_${String(body.payload.rowIndex ?? 0)}`;
   return {
     taskId,
     operation: 'SYNC_DASHBOARD',
@@ -148,7 +158,7 @@ export function errorEnrichManifest(
           size: 2,
           props: {
             title: 'Nav',
-            text: 'Esc → board',
+            text: isBoardPrompt(body) ? 'q quit' : 'Esc → board',
             style: 'white',
           },
         },

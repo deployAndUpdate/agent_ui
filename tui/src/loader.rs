@@ -38,7 +38,9 @@ pub fn ring_lines(frame: usize) -> Vec<String> {
     for (i, &(x, y)) in RING.iter().enumerate() {
         grid[y][x] = if i == head { '●' } else { '·' };
     }
-    grid.into_iter().map(|row| row.into_iter().collect()).collect()
+    grid.into_iter()
+        .map(|row| row.into_iter().collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -55,7 +57,10 @@ mod tests {
     fn ring_has_one_head() {
         let lines = ring_lines(0);
         assert_eq!(lines.len(), 5);
-        let heads: usize = lines.iter().map(|l| l.chars().filter(|c| *c == '●').count()).sum();
+        let heads: usize = lines
+            .iter()
+            .map(|l| l.chars().filter(|c| *c == '●').count())
+            .sum();
         assert_eq!(heads, 1);
     }
 }

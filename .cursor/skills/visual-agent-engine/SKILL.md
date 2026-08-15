@@ -121,13 +121,13 @@ Client or HTTP `POST /api/v1/tui/action`:
 | `select_row` | Push ephemeral detail board (`taskId` `detail_<widgetId>_<row>`); TUI auto-sends `/details` |
 | `navigate_back` | Re-publish session board |
 | `command` `/details` | POST agent webhook (`systemPrompt`: `more details`); agent SYNC enriched detail |
-| `command` `/prompt` | POST webhook with user prompt + focused widget; daemon merges chunks onto the detail board |
+| `command` `/prompt` | POST webhook with user prompt + focused widget; daemon merges chunks. `payload.scope=detail` (ephemeral `detail_*`) or `board` (persists session board) |
 
 `TUI_ACTION_REACTOR=builtin` (default) for select_row/navigate_back. Set `off` to only record those. `/details` and `/prompt` always use `TUI_AGENT_WEBHOOK_URL` when set.
 
 For custom detail screens: listen for `select_row`, then `SYNC_DASHBOARD` with your own chunks; handle `navigate_back` the same way or leave builtin on.
 
-TUI keys (browse → table → Enter → auto `/details` → `i` + arrows on detail → `p`): [reference.md](reference.md#tui-navigation).
+TUI keys (Idle/`p` on board, browse → table → Enter → auto `/details` → `i` + arrows on detail → `p`): [reference.md](reference.md#tui-navigation).
 
 ## Do / Don't
 

@@ -88,4 +88,45 @@ describe('mergeDetailChunks', () => {
     expect(merged.layout.chunks.length).toBe(3);
     expect(merged.layout.chunks[2]?.widgetId).toContain('w_prompt_');
   });
+
+  it('board prompt keeps session taskId (not detail_*)', () => {
+    const board: TuiManifest = {
+      taskId: 'task_7749',
+      operation: 'SYNC_DASHBOARD',
+      layout: {
+        direction: 'vertical',
+        chunks: [
+          {
+            widgetId: 'w_header',
+            type: 'Paragraph',
+            size: 3,
+            props: { text: 'hello' },
+          },
+        ],
+      },
+    };
+    const boardBody: AgentWebhookBody = {
+      ...body,
+      taskId: 'task_7749',
+      widgetId: 'w_header',
+      payload: {
+        scope: 'board',
+        userPrompt: 'add a list',
+        focusedWidgetId: 'w_header',
+        currentDetail: board,
+      },
+    };
+    expect(currentDetailFromBody(boardBody)?.taskId).toBe('task_7749');
+    const merged = mergeDetailChunks(
+      board,
+      stubPromptPatch(boardBody),
+      false,
+    );
+    expect(merged.taskId).toBe('task_7749');
+    expect(merged.taskId.startsWith('detail_')).toBe(false);
+    expect(merged.layout.chunks.map((c) => c.widgetId)).toEqual([
+      'w_header',
+      'w_prompt_w_header',
+    ]);
+  });
 });

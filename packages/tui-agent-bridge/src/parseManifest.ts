@@ -102,7 +102,9 @@ export function extractJsonObject(text: string): unknown {
 export function normalizeDetailManifest(
   raw: unknown,
   fallbackTaskId: string,
+  opts?: { forceDetail?: boolean },
 ): TuiManifest {
+  const forceDetail = opts?.forceDetail !== false;
   const parsed = extractJsonObject(
     typeof raw === 'string' ? raw : JSON.stringify(raw),
   );
@@ -120,10 +122,14 @@ export function normalizeDetailManifest(
     throw new Error(`invalid TuiManifest: ${validation.errors.join('; ')}`);
   }
   const manifest = validation.data;
-  if (!manifest.taskId.startsWith('detail_')) {
-    manifest.taskId = fallbackTaskId.startsWith('detail_')
-      ? fallbackTaskId
-      : `detail_${fallbackTaskId}`;
+  if (forceDetail) {
+    if (!manifest.taskId.startsWith('detail_')) {
+      manifest.taskId = fallbackTaskId.startsWith('detail_')
+        ? fallbackTaskId
+        : `detail_${fallbackTaskId}`;
+    }
+  } else {
+    manifest.taskId = fallbackTaskId;
   }
   return manifest;
 }
@@ -132,9 +138,11 @@ export function normalizeDetailManifest(
 export function normalizePatchManifest(
   raw: unknown,
   fallbackTaskId: string,
+  opts?: { forceDetail?: boolean },
 ): TuiManifest {
+  const forceDetail = opts?.forceDetail !== false;
   try {
-    return normalizeDetailManifest(raw, fallbackTaskId);
+    return normalizeDetailManifest(raw, fallbackTaskId, opts);
   } catch (first) {
     const parsed = extractJsonObject(
       typeof raw === 'string' ? raw : JSON.stringify(raw),
@@ -152,15 +160,19 @@ export function normalizePatchManifest(
         ? inner.chunks
         : null;
     if (!chunks || chunks.length === 0) throw first;
+    const taskId = forceDetail
+      ? fallbackTaskId.startsWith('detail_')
+        ? fallbackTaskId
+        : `detail_${fallbackTaskId}`
+      : fallbackTaskId;
     return normalizeDetailManifest(
       {
-        taskId: fallbackTaskId.startsWith('detail_')
-          ? fallbackTaskId
-          : `detail_${fallbackTaskId}`,
+        taskId,
         operation: 'SYNC_DASHBOARD',
         layout: { direction: 'vertical', chunks },
       },
       fallbackTaskId,
+      opts,
     );
   }
 }

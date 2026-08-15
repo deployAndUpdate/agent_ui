@@ -12,6 +12,7 @@ import {
 import { SessionQueue } from './queue.js';
 import {
   currentDetailFromBody,
+  isBoardPrompt,
   mergeDetailChunks,
   stubPromptPatch,
 } from './mergeChunks.js';
@@ -87,26 +88,31 @@ export class DaemonRuntime {
       try {
         const current = currentDetailFromBody(body);
         const errBoard = errorEnrichManifest(body, message);
+        const forceDetail = !isBoardPrompt(body);
         const manifest =
           body.command.trim() === '/prompt' && current
-            ? mergeDetailChunks(current, {
-                ...errBoard,
-                layout: {
-                  direction: 'vertical',
-                  chunks: [
-                    {
-                      widgetId: 'w_prompt_error',
-                      type: 'Paragraph',
-                      size: 5,
-                      props: {
-                        title: 'prompt error',
-                        text: message.slice(0, 2000),
-                        style: 'red',
+            ? mergeDetailChunks(
+                current,
+                {
+                  ...errBoard,
+                  layout: {
+                    direction: 'vertical',
+                    chunks: [
+                      {
+                        widgetId: 'w_prompt_error',
+                        type: 'Paragraph',
+                        size: 5,
+                        props: {
+                          title: 'prompt error',
+                          text: message.slice(0, 2000),
+                          style: 'red',
+                        },
                       },
-                    },
-                  ],
+                    ],
+                  },
                 },
-              })
+                forceDetail,
+              )
             : errBoard;
         await this.callback(body, manifest);
       } catch (cbErr) {
@@ -167,11 +173,12 @@ export class DaemonRuntime {
   }
 
   private async runPrompt(body: AgentWebhookBody): Promise<JobResult> {
-    const current = currentDetailFromBody(body);
+    const forceDetail = !isBoardPrompt(body);
+    const current = currentDetailFromBody(body, { forceDetail });
     if (this.cfg.driver === 'stub' || this.llm === 'error') {
       return {
         kind: 'manifest',
-        manifest: mergeDetailChunks(current, stubPromptPatch(body)),
+        manifest: mergeDetailChunks(current, stubPromptPatch(body), forceDetail),
       };
     }
 
@@ -180,18 +187,18 @@ export class DaemonRuntime {
       if (fwd.asyncHandled) {
         return { kind: 'peer_callback' };
       }
-      const patch = normalizePatchManifest(fwd.text!, body.taskId);
+      const patch = normalizePatchManifest(fwd.text!, body.taskId, { forceDetail });
       return {
         kind: 'manifest',
-        manifest: mergeDetailChunks(current, patch),
+        manifest: mergeDetailChunks(current, patch, forceDetail),
       };
     }
 
     const text = await this.runLlm(body, buildPromptFollowUp(body));
-    const patch = normalizePatchManifest(text, body.taskId);
+    const patch = normalizePatchManifest(text, body.taskId, { forceDetail });
     return {
       kind: 'manifest',
-      manifest: mergeDetailChunks(current, patch),
+      manifest: mergeDetailChunks(current, patch, forceDetail),
     };
   }
 
