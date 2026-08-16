@@ -10,6 +10,11 @@ pub enum NavMode {
         widget_id: String,
         row: usize,
     },
+    ChartInteract {
+        widget_id: String,
+        series: usize,
+        index: usize,
+    },
     AwaitDetail {
         widget_id: String,
         row: usize,
@@ -46,6 +51,7 @@ impl NavMode {
             Self::Idle => "idle",
             Self::Browse => "browse",
             Self::TableInteract { .. } => "table",
+            Self::ChartInteract { .. } => "chart",
             Self::AwaitDetail { .. } => "await-detail",
             Self::DetailScreen { .. } => "detail",
             Self::DetailBrowse { .. } => "detail-browse",
@@ -104,8 +110,8 @@ impl PromptScope {
 pub const PAGE_STEP: u16 = 5;
 pub const DETAILS_SYSTEM_PROMPT: &str = "more details";
 
-pub fn detail_cache_key(widget_id: &str, row: usize) -> String {
-    format!("{widget_id}:{row}")
+pub fn detail_cache_key(widget_id: &str, slot: impl AsRef<str>) -> String {
+    format!("{}:{}", widget_id, slot.as_ref())
 }
 
 /// After the builtin stub lands, send `/details` once (not on later agent callbacks).
@@ -204,6 +210,15 @@ mod tests {
             "table"
         );
         assert_eq!(
+            NavMode::ChartInteract {
+                widget_id: "w".into(),
+                series: 0,
+                index: 1,
+            }
+            .label(),
+            "chart"
+        );
+        assert_eq!(
             NavMode::PromptInsert {
                 from_widget: "w".into(),
                 focused_widget: None,
@@ -259,6 +274,7 @@ mod tests {
 
     #[test]
     fn cache_key_is_stable() {
-        assert_eq!(detail_cache_key("w_table", 3), "w_table:3");
+        assert_eq!(detail_cache_key("w_table", "3"), "w_table:3");
+        assert_eq!(detail_cache_key("w_chart", "s0:i2"), "w_chart:s0:i2");
     }
 }

@@ -8,11 +8,17 @@ function detailManifest(
   action: TuiUserAction,
   headers: string[],
   row: string[],
+  opts?: { taskId?: string; title?: string },
 ): TuiManifest {
   const lines = headers.map((h, i) => `${h}: ${row[i] ?? ''}`);
-  const title = `Row ${typeof action.payload.rowIndex === 'number' ? action.payload.rowIndex : '?'}`;
+  const title =
+    opts?.title ??
+    `Row ${typeof action.payload.rowIndex === 'number' ? action.payload.rowIndex : '?'}`;
+  const taskId =
+    opts?.taskId ??
+    `detail_${action.widgetId}_${String(action.payload.rowIndex ?? 0)}`;
   return {
-    taskId: `detail_${action.widgetId}_${String(action.payload.rowIndex ?? 0)}`,
+    taskId,
     operation: 'SYNC_DASHBOARD',
     layout: {
       direction: 'vertical',
@@ -80,7 +86,7 @@ export function isBuiltinReactorEnabled(): boolean {
 
 /**
  * Built-in action reactor:
- * - select_row / navigate_back: ephemeral outbox (session stays board)
+ * - select_row / select_point / navigate_back: ephemeral outbox (session stays board)
  * - command /details | /prompt: HTTP agent webhook (TUI_AGENT_WEBHOOK_URL)
  */
 export async function reactToUserAction(opts: {
@@ -146,6 +152,38 @@ export async function reactToUserAction(opts: {
     log.info(
       { sessionId, widgetId: action.widgetId, rowIndex, taskId: detail.taskId },
       'reactor pushed ephemeral detail',
+    );
+    return { reacted: true };
+  }
+
+  if (action.action === 'select_point') {
+    const snap = await store.getSession(sessionId);
+    if (!snap) {
+      log.warn({ sessionId }, 'select_point: no session');
+      return { reacted: false };
+    }
+    const seriesIndex =
+      typeof action.payload.seriesIndex === 'number' ? action.payload.seriesIndex : 0;
+    const pointIndex =
+      typeof action.payload.pointIndex === 'number' ? action.payload.pointIndex : 0;
+    const headers = ['kind', 'series', 'label', 'value', 'percent'];
+    const row = [
+      String(action.payload.kind ?? 'line'),
+      String(action.payload.seriesName ?? ''),
+      String(action.payload.label ?? ''),
+      String(action.payload.value ?? ''),
+      action.payload.percent == null || action.payload.percent === ''
+        ? ''
+        : String(action.payload.percent),
+    ];
+    const detail = detailManifest(action, headers, row, {
+      taskId: `detail_${action.widgetId}_s${seriesIndex}_i${pointIndex}`,
+      title: `Point ${String(action.payload.label ?? pointIndex)}`,
+    });
+    await store.enqueueOutbox(sessionId, detail);
+    log.info(
+      { sessionId, widgetId: action.widgetId, pointIndex, taskId: detail.taskId },
+      'reactor pushed ephemeral chart detail',
     );
     return { reacted: true };
   }

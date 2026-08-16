@@ -37,6 +37,7 @@ function cfg(partial: Partial<BridgeConfig> = {}): BridgeConfig {
     forwardUrl: null,
     forwardMode: 'sync',
     timeoutMs: 15_000,
+    jsonRetries: 3,
     ...partial,
   };
 }

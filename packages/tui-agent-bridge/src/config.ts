@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { clampJsonRetries, DEFAULT_JSON_RETRIES } from './retryJson.js';
 import type { BridgeConfig, BridgeDriver, ForwardMode } from './types.js';
 
 const DRIVERS = new Set<BridgeDriver>(['exec', 'forward', 'cli', 'sdk', 'stub']);
@@ -58,5 +59,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     forwardUrl,
     forwardMode,
     timeoutMs: Number(env.TUI_BRIDGE_TIMEOUT_MS ?? 120_000),
+    jsonRetries: clampJsonRetries(
+      Number(env.TUI_BRIDGE_JSON_RETRIES ?? DEFAULT_JSON_RETRIES),
+    ),
   };
 }

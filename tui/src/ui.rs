@@ -10,7 +10,7 @@ use ratatui::Frame;
 use crate::action::DetailCtx;
 use crate::content_measure::allocated_height;
 use crate::layout_chunks::constraints_from_chunks;
-use crate::loader::{ring_lines, spinner_frame, status_phrase};
+use crate::loader::{ring_lines, spinner_frame, status_phrase, RING_COLS};
 use crate::model::{TuiChunk, TuiManifest, WsStatus};
 use crate::nav::{
     detail_cache_key, hover_from_viewport, should_auto_details, table_row_count, NavMode,
@@ -74,6 +74,7 @@ impl UiState {
                 | NavMode::DetailScreen { .. }
                 | NavMode::DetailBrowse { .. }
                 | NavMode::TableInteract { .. }
+                | NavMode::ChartInteract { .. }
         );
         self.manifest = Some(manifest);
         if reset_view {
@@ -179,14 +180,21 @@ impl UiState {
         if !manifest.task_id.starts_with("detail_") {
             return;
         }
-        let key = detail_cache_key(&ctx.source_widget_id, ctx.row_index.unwrap_or(0));
+        let key = detail_cache_key(&ctx.source_widget_id, &ctx.cache_slot);
         self.detail_cache.insert(key, manifest);
     }
 
-    pub fn cached_detail(&self, widget_id: &str, row: usize) -> Option<TuiManifest> {
+    pub fn cached_detail(&self, widget_id: &str, slot: impl AsRef<str>) -> Option<TuiManifest> {
         self.detail_cache
-            .get(&detail_cache_key(widget_id, row))
+            .get(&detail_cache_key(widget_id, slot))
             .cloned()
+    }
+
+    pub fn has_row_detail(&self, widget_id: &str, row: usize) -> bool {
+        self.detail_cache.contains_key(&detail_cache_key(
+            widget_id,
+            crate::chart::table_cache_slot(row),
+        ))
     }
 
     pub fn show_cached_detail(&mut self, widget_id: String, manifest: TuiManifest) {
@@ -455,15 +463,103 @@ impl UiState {
         let Some(chunk) = self.hovered_chunk().cloned() else {
             return false;
         };
-        if chunk.widget_type != "Table" {
-            return false;
+        match chunk.widget_type.as_str() {
+            "Table" => {
+                let rows = table_row_count(&chunk);
+                self.nav = NavMode::TableInteract {
+                    widget_id: chunk.widget_id,
+                    row: 0.min(rows.saturating_sub(1)),
+                };
+                true
+            }
+            "Chart" => {
+                self.nav = NavMode::ChartInteract {
+                    widget_id: chunk.widget_id,
+                    series: 0,
+                    index: 0,
+                };
+                true
+            }
+            _ => false,
         }
-        let rows = table_row_count(&chunk);
-        self.nav = NavMode::TableInteract {
-            widget_id: chunk.widget_id,
-            row: 0.min(rows.saturating_sub(1)),
+    }
+
+    pub fn chart_move_index(&mut self, delta: i32) {
+        let NavMode::ChartInteract {
+            widget_id,
+            series,
+            index,
+        } = &self.nav
+        else {
+            return;
         };
-        true
+        let widget_id = widget_id.clone();
+        let series = *series;
+        let index = *index;
+        let Some(props) = self
+            .manifest
+            .as_ref()
+            .and_then(|m| m.layout.chunks.iter().find(|c| c.widget_id == widget_id))
+            .and_then(crate::chart::props_from_chunk)
+        else {
+            return;
+        };
+        let kind = crate::chart::kind_of(&props);
+        let n = crate::chart::point_count(&props, kind);
+        if n == 0 {
+            return;
+        }
+        let next = if delta < 0 {
+            index.saturating_sub((-delta) as usize)
+        } else {
+            (index + delta as usize).min(n - 1)
+        };
+        self.nav = NavMode::ChartInteract {
+            widget_id,
+            series,
+            index: next,
+        };
+    }
+
+    pub fn chart_move_series(&mut self, delta: i32) {
+        let NavMode::ChartInteract {
+            widget_id,
+            series,
+            index,
+        } = &self.nav
+        else {
+            return;
+        };
+        let widget_id = widget_id.clone();
+        let series = *series;
+        let index = *index;
+        let Some(props) = self
+            .manifest
+            .as_ref()
+            .and_then(|m| m.layout.chunks.iter().find(|c| c.widget_id == widget_id))
+            .and_then(crate::chart::props_from_chunk)
+        else {
+            return;
+        };
+        let kind = crate::chart::kind_of(&props);
+        if kind == crate::chart::ChartKind::Pie {
+            return;
+        }
+        let n = crate::chart::series_count(&props, kind);
+        if n == 0 {
+            return;
+        }
+        let next = if delta < 0 {
+            series.saturating_sub((-delta) as usize)
+        } else {
+            (series + delta as usize).min(n - 1)
+        };
+        let max_i = crate::chart::point_count(&props, kind).saturating_sub(1);
+        self.nav = NavMode::ChartInteract {
+            widget_id,
+            series: next,
+            index: index.min(max_i),
+        };
     }
 
     pub fn table_move_row(&mut self, delta: i32) {
@@ -667,7 +763,7 @@ fn draw_enrich_overlay(frame: &mut Frame, area: Rect, state: &UiState) {
         _ => "/details",
     };
 
-    let width = 42.min(area.width.saturating_sub(2)).max(24);
+    let width = 32.min(area.width.saturating_sub(2)).max(22);
     let height = 13.min(area.height.saturating_sub(1)).max(11);
     let overlay = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
@@ -677,16 +773,33 @@ fn draw_enrich_overlay(frame: &mut Frame, area: Rect, state: &UiState) {
     };
     frame.render_widget(Clear, overlay);
 
+    let inner_w = overlay.width.saturating_sub(2) as usize;
+    let pad = inner_w.saturating_sub(RING_COLS) / 2;
+    let pad_s: String = " ".repeat(pad);
+
     let mut lines: Vec<Line> = vec![Line::from("")];
     for row in ring_lines(frame_i) {
-        lines.push(Line::from(Span::styled(
-            format!("    {row}"),
-            Style::default().fg(Color::Cyan),
-        )));
+        let mut spans = vec![Span::raw(pad_s.clone())];
+        for ch in row.chars() {
+            spans.push(match ch {
+                '●' => Span::styled(
+                    "●",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                '•' => Span::styled("•", Style::default().fg(Color::Yellow)),
+                '○' => Span::styled("○", Style::default().fg(Color::Cyan)),
+                other => Span::raw(other.to_string()),
+            });
+        }
+        lines.push(Line::from(spans));
     }
     lines.push(Line::from(""));
+    let phrase_txt = format!("{phrase}…");
+    let phrase_pad = " ".repeat(inner_w.saturating_sub(phrase_txt.chars().count()) / 2);
     lines.push(Line::from(vec![
-        Span::raw("    "),
+        Span::raw(phrase_pad),
         Span::styled(
             phrase,
             Style::default()
@@ -695,8 +808,10 @@ fn draw_enrich_overlay(frame: &mut Frame, area: Rect, state: &UiState) {
         ),
         Span::styled("…", Style::default().fg(Color::Yellow)),
     ]));
+    let hint = "waiting for board";
+    let hint_pad = " ".repeat(inner_w.saturating_sub(hint.len()) / 2);
     lines.push(Line::from(Span::styled(
-        "    holding this screen until the board arrives",
+        format!("{hint_pad}{hint}"),
         Style::default().fg(Color::DarkGray),
     )));
 
@@ -772,15 +887,16 @@ fn chunk_opts(state: &UiState, chunk_index: usize, chunk: &TuiChunk) -> ChunkRen
         NavMode::Browse | NavMode::DetailBrowse { .. } => {
             state.hover_chunk_index() == Some(chunk_index)
         }
-        NavMode::TableInteract { widget_id, .. } | NavMode::AwaitDetail { widget_id, .. } => {
-            widget_id == &chunk.widget_id
-        }
+        NavMode::TableInteract { widget_id, .. }
+        | NavMode::ChartInteract { widget_id, .. }
+        | NavMode::AwaitDetail { widget_id, .. } => widget_id == &chunk.widget_id,
         _ => false,
     };
 
     let active = matches!(
         &state.nav,
-        NavMode::TableInteract { widget_id, .. } if widget_id == &chunk.widget_id
+        NavMode::TableInteract { widget_id, .. } | NavMode::ChartInteract { widget_id, .. }
+            if widget_id == &chunk.widget_id
     );
 
     let selected_row = match &state.nav {
@@ -792,12 +908,33 @@ fn chunk_opts(state: &UiState, chunk_index: usize, chunk: &TuiChunk) -> ChunkRen
         _ => None,
     };
 
+    let (chart_series, chart_index) = match &state.nav {
+        NavMode::ChartInteract {
+            widget_id,
+            series,
+            index,
+        } if widget_id == &chunk.widget_id => (Some(*series), Some(*index)),
+        _ => (None, None),
+    };
+
+    let ready_rows = if chunk.widget_type == "Table" {
+        let n = table_row_count(chunk);
+        (0..n)
+            .map(|r| state.has_row_detail(&chunk.widget_id, r))
+            .collect()
+    } else {
+        vec![]
+    };
+
     ChunkRenderOpts {
         focused: idle_focused,
         hovered: yellow,
         active,
         scroll,
         selected_row,
+        chart_series,
+        chart_index,
+        ready_rows,
     }
 }
 
@@ -869,6 +1006,7 @@ fn mode_hint(state: &UiState) -> String {
         NavMode::Idle => "i browse · Tab focus · p prompt · ↑↓ widget · PgUp/Dn page · q".into(),
         NavMode::Browse => format!("↑↓ page · p prompt · Enter open · Esc idle · hover={hover_id}"),
         NavMode::TableInteract { .. } => "↑↓ row · Enter open · Esc back".into(),
+        NavMode::ChartInteract { .. } => "←→ point · ↑↓ series · Enter open · Esc back".into(),
         NavMode::AwaitDetail { .. } => "waiting for detail\u{2026}".into(),
         NavMode::DetailScreen { .. } => "i browse · Tab focus · p prompt · Esc board".into(),
         NavMode::DetailBrowse { .. } => {
@@ -904,7 +1042,7 @@ fn draw_status(frame: &mut Frame, area: Rect, state: &UiState) {
     let mode_color = match &state.nav {
         NavMode::Idle => Color::DarkGray,
         NavMode::Browse => Color::Yellow,
-        NavMode::TableInteract { .. } => Color::Yellow,
+        NavMode::TableInteract { .. } | NavMode::ChartInteract { .. } => Color::Yellow,
         NavMode::DetailScreen { .. } => Color::Magenta,
         NavMode::DetailBrowse { .. } => Color::Yellow,
         NavMode::PromptInsert { .. } => Color::Yellow,
@@ -981,13 +1119,15 @@ mod cache_tests {
             source_widget_id: "w_t".into(),
             row_index: Some(0),
             row: vec!["a".into()],
+            cache_slot: "0".into(),
         });
         s.nav = NavMode::AwaitDetail {
             widget_id: "w_t".into(),
             row: 0,
         };
         s.set_manifest(para("stub"));
-        assert!(s.cached_detail("w_t", 0).is_none());
+        assert!(s.cached_detail("w_t", "0").is_none());
+        assert!(!s.has_row_detail("w_t", 0));
     }
 
     #[test]
@@ -997,6 +1137,7 @@ mod cache_tests {
             source_widget_id: "w_t".into(),
             row_index: Some(0),
             row: vec!["a".into()],
+            cache_slot: "0".into(),
         });
         s.nav = NavMode::AwaitEnrich {
             from_widget: "w_t".into(),
@@ -1005,7 +1146,7 @@ mod cache_tests {
             resume_browse: false,
         };
         s.set_manifest(para("enriched"));
-        let hit = s.cached_detail("w_t", 0).expect("cached");
+        let hit = s.cached_detail("w_t", "0").expect("cached");
         assert_eq!(hit.layout.chunks[0].props["text"], "enriched");
 
         s.show_cached_detail("w_t".into(), hit);
@@ -1016,6 +1157,8 @@ mod cache_tests {
         );
         assert!(s.details_auto_sent);
         assert!(!s.consume_auto_details());
+        assert!(s.has_row_detail("w_t", 0));
+        assert!(!s.has_row_detail("w_t", 1));
     }
 
     #[test]
@@ -1041,7 +1184,7 @@ mod cache_tests {
             },
         });
         assert!(matches!(s.nav, NavMode::Idle));
-        assert!(s.cached_detail("w_header", 0).is_none());
+        assert!(s.cached_detail("w_header", "0").is_none());
     }
 
     #[test]
@@ -1076,5 +1219,38 @@ mod cache_tests {
         ));
         s.prompt_cancel();
         assert!(matches!(s.nav, NavMode::Browse));
+    }
+
+    #[test]
+    fn chart_enter_opens_interact() {
+        let mut s = UiState::new("demo".into());
+        s.nav = NavMode::Browse;
+        s.manifest = Some(TuiManifest {
+            task_id: "t".into(),
+            operation: "SYNC_DASHBOARD".into(),
+            layout: TuiLayout {
+                direction: "vertical".into(),
+                chunks: vec![TuiChunk {
+                    widget_id: "w_pie".into(),
+                    widget_type: "Chart".into(),
+                    size: 8,
+                    props: json!({
+                        "kind": "pie",
+                        "labels": ["a", "b"],
+                        "datasets": [{ "name": "share", "data": [1, 2] }]
+                    }),
+                }],
+            },
+        });
+        s.hover = 0;
+        assert!(s.try_activate_hovered());
+        assert!(matches!(
+            s.nav,
+            NavMode::ChartInteract {
+                index: 0,
+                series: 0,
+                ..
+            }
+        ));
     }
 }

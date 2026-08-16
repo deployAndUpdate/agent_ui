@@ -53,8 +53,14 @@ export function healTuiManifest(payload: unknown, _errors: string[] = []): unkno
     if (type === 'Gauge' && typeof props.ratio !== 'number') {
       props = { ...props, ratio: 0 };
     }
-    if (type === 'Chart' && !Array.isArray(props.datasets)) {
-      props = { ...props, datasets: [{ name: 'series', data: [0] }] };
+    if (type === 'Chart') {
+      if (!Array.isArray(props.datasets)) {
+        props = { ...props, datasets: [{ name: 'series', data: [0] }] };
+      }
+      const kinds = ['line', 'bar', 'sparkline', 'pie', 'stacked'];
+      if (props.kind != null && !kinds.includes(String(props.kind))) {
+        props = { ...props, kind: 'line' };
+      }
     }
     return {
       widgetId: String(c.widgetId ?? `w_${i + 1}`),

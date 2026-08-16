@@ -1,5 +1,6 @@
 mod action;
 mod app;
+mod chart;
 mod content_measure;
 mod layout_chunks;
 mod loader;

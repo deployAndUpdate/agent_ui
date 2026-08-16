@@ -25,6 +25,8 @@ TUI /details or /prompt
 
 Jobs for the same `sessionId` run one at a time. Known commands: `/details`, `/prompt`. Unknown commands fail and callback an error detail board so the TUI leaves AwaitEnrich.
 
+If the LLM reply is not schema-valid JSON, the daemon does **not** POST yet. It `agent.send`s the parse/AJV error plus the truncated previous output and retries (default 3, `TUI_BRIDGE_JSON_RETRIES`, max 5). Only a valid TuiManifest is callback'd. After the budget, the existing error board path runs. The Visual Engine backend stays a dumb AJV gate (`400` + `errors[]`); it never talks to the model.
+
 ## Drivers
 
 | Driver | Use when | Config |
@@ -72,7 +74,7 @@ npm run bridge
 TUI_SESSION_ID=demo npm run dev:tui
 ```
 
-Table row Enter → auto `/details` overlay. `p` on Idle/Browse patches the **root board** (persisted). On the detail screen, Tab focuses a widget, `p` opens a prompt box; the daemon merges the reply onto that detail board (ephemeral).
+Table row or chart point Enter → auto `/details` overlay. `p` on Idle/Browse patches the **root board** (persisted). On the detail screen, Tab focuses a widget, `p` opens a prompt box; the daemon merges the reply onto that detail board (ephemeral).
 
 ## Env
 
@@ -84,6 +86,7 @@ Table row Enter → auto `/details` overlay. `p` on Idle/Browse patches the **ro
 | `TUI_BRIDGE_FORWARD_URL` | — (`forward`) |
 | `TUI_BRIDGE_FORWARD_MODE` | `sync` |
 | `TUI_BRIDGE_TIMEOUT_MS` | `120000` |
+| `TUI_BRIDGE_JSON_RETRIES` | `3` (1–5) |
 | `TUI_AGENT_WEBHOOK_TOKEN` | — Bearer (optional) |
 | `CURSOR_API_KEY` | — (`sdk`) |
 | `VISUAL_ENGINE_API_KEY` | — callback `X-API-Key` |

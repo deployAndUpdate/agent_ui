@@ -1,5 +1,14 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { validateTuiManifest } from '../src/validateTuiManifest.js';
+
+const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const contractFixtures = fs
+  .readdirSync(fixturesDir)
+  .filter((f) => f.endsWith('.json'))
+  .sort();
 
 const canonicalManifest = {
   taskId: 'task_7749',
@@ -84,6 +93,79 @@ describe('validateTuiManifest', () => {
     }
   });
 
+  it('accepts Chart kinds and optional labels', () => {
+    for (const kind of ['line', 'bar', 'sparkline', 'pie', 'stacked'] as const) {
+      const result = validateTuiManifest({
+        taskId: 'task_1',
+        operation: 'SYNC_DASHBOARD',
+        layout: {
+          chunks: [
+            {
+              widgetId: 'c',
+              type: 'Chart',
+              size: 8,
+              props: {
+                kind,
+                title: 'Trend',
+                labels: ['a', 'b', 'c'],
+                datasets: [{ name: 'cpu', data: [1, 2, 3] }],
+              },
+            },
+          ],
+        },
+      });
+      expect(result.ok, kind).toBe(true);
+    }
+  });
+
+  it('rejects unknown Chart kind', () => {
+    const result = validateTuiManifest({
+      taskId: 'task_1',
+      operation: 'SYNC_DASHBOARD',
+      layout: {
+        chunks: [
+          {
+            widgetId: 'c',
+            type: 'Chart',
+            size: 8,
+            props: {
+              kind: 'radar',
+              datasets: [{ name: 'cpu', data: [1, 2, 3] }],
+            },
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('accepts Table visual props', () => {
+    const result = validateTuiManifest({
+      taskId: 'task_1',
+      operation: 'SYNC_DASHBOARD',
+      layout: {
+        chunks: [
+          {
+            widgetId: 't',
+            type: 'Table',
+            size: 6,
+            props: {
+              title: 'Files',
+              headers: ['id', 'score'],
+              rows: [['1', '0.9']],
+              align: ['left', 'right'],
+              numericAlign: true,
+              zebra: false,
+              compact: true,
+              highlightColumn: 0,
+            },
+          },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it('rejects invalid Table props', () => {
     const result = validateTuiManifest({
       taskId: 'task_1',
@@ -100,5 +182,14 @@ describe('validateTuiManifest', () => {
       },
     });
     expect(result.ok).toBe(false);
+  });
+
+  it.each(contractFixtures)('contract fixture %s passes AJV', (file) => {
+    const raw = fs.readFileSync(path.join(fixturesDir, file), 'utf8');
+    const payload = JSON.parse(raw) as unknown;
+    const result = validateTuiManifest(payload);
+    expect(result.ok, result.ok ? '' : (result as { errors: string[] }).errors.join('; ')).toBe(
+      true,
+    );
   });
 });

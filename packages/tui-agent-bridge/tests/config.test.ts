@@ -78,5 +78,10 @@ describe('readConfig', () => {
     expect(cfg.host).toBe('127.0.0.1');
     expect(cfg.port).toBe(9090);
     expect(cfg.path).toBe('/agent');
+    expect(cfg.jsonRetries).toBe(3);
+  });
+
+  it('TUI_BRIDGE_JSON_RETRIES is clamped', () => {
+    expect(readConfig({ TUI_BRIDGE_JSON_RETRIES: '9' }).jsonRetries).toBe(5);
   });
 });

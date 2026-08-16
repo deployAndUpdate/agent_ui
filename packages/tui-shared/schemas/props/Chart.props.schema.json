@@ -5,6 +5,15 @@
   "additionalProperties": false,
   "properties": {
     "title": { "type": "string" },
+    "kind": {
+      "type": "string",
+      "enum": ["line", "bar", "sparkline", "pie", "stacked"],
+      "default": "line"
+    },
+    "labels": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "datasets": {
       "type": "array",
       "minItems": 1,

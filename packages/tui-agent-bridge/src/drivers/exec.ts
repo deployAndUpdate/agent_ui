@@ -52,6 +52,7 @@ export function parseArgv(cmd: string): string[] {
 export async function runExecDriver(
   body: AgentWebhookBody,
   cfg: BridgeConfig,
+  prompt = buildEnrichPrompt(body),
 ): Promise<string> {
   const argv = parseArgv(cfg.execCommand);
   if (argv.length === 0) {
@@ -71,7 +72,7 @@ export async function runExecDriver(
 
   const payload = JSON.stringify({
     ...body,
-    prompt: buildEnrichPrompt(body),
+    prompt,
   });
 
   const dir = mkdtempSync(path.join(tmpdir(), 'tui-enrich-'));

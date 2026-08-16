@@ -42,9 +42,26 @@ pub struct ParagraphProps {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TableProps {
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub align: Option<Vec<String>>,
+    #[serde(default = "default_true")]
+    pub numeric_align: bool,
+    #[serde(default = "default_true")]
+    pub zebra: bool,
+    #[serde(default)]
+    pub compact: bool,
+    #[serde(default)]
+    pub highlight_column: Option<usize>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -71,6 +88,10 @@ pub struct ChartProps {
     pub datasets: Vec<ChartDataset>,
     #[serde(default)]
     pub title: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

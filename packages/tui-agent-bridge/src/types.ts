@@ -45,4 +45,6 @@ export interface BridgeConfig {
   /** sync: response body = manifest; async: peer calls callback itself */
   forwardMode: ForwardMode;
   timeoutMs: number;
+  /** LLM JSON parse/schema retries (1–5). Invalid replies are sent back with the error. */
+  jsonRetries: number;
 }

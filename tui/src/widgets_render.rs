@@ -1,13 +1,17 @@
-use ratatui::layout::Constraint;
+use ratatui::layout::{Alignment, Constraint};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Axis, Block, Borders, Cell, Chart, Dataset, Gauge, GraphType, List, ListItem, ListState,
-    Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
+    Axis, Bar, BarChart, BarGroup, Block, Borders, Cell, Chart, Dataset, Gauge, GraphType, List,
+    ListItem, ListState, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    Sparkline, SparklineBar, Table, TableState, Wrap,
 };
 use ratatui::Frame;
 
+use crate::chart::{
+    category_label, kind_of, pie_slices, point_count, selected_point, series_count, ChartKind,
+};
 use crate::content_measure::{table_col_maxes, wrap_line_count};
 use crate::model::{ChartProps, GaugeProps, ListProps, ParagraphProps, TableProps, TuiChunk};
 
@@ -29,6 +33,10 @@ pub struct ChunkRenderOpts {
     pub active: bool,
     pub scroll: u16,
     pub selected_row: Option<usize>,
+    pub chart_series: Option<usize>,
+    pub chart_index: Option<usize>,
+    /// Rows whose detail board is already cached (Table only).
+    pub ready_rows: Vec<bool>,
 }
 
 pub fn style_name_to_color(name: Option<&str>) -> Color {
@@ -202,16 +210,29 @@ fn render_table(
         return;
     };
 
-    let title = title_mark(opts, format!("▤ {}", chunk.widget_id));
+    let title = title_mark(
+        opts,
+        props
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("▤ {}", chunk.widget_id)),
+    );
 
-    let header = Row::new(props.headers.iter().map(|h| {
-        Cell::from(Span::styled(
-            h.clone(),
-            Style::default()
+    let n_cols = props.headers.len();
+    let check_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+    let header = Row::new(std::iter::once(Cell::from(" ")).chain(
+        props.headers.iter().enumerate().map(|(c, h)| {
+            let mut style = Style::default()
                 .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ))
-    }))
+                .add_modifier(Modifier::BOLD);
+            if props.highlight_column == Some(c) {
+                style = style.fg(Color::Cyan);
+            }
+            Cell::from(align_line(h, col_align(&props, c), style))
+        }),
+    ))
     .height(1)
     .bottom_margin(0);
 
@@ -220,16 +241,32 @@ fn render_table(
         .iter()
         .enumerate()
         .map(|(i, row)| {
-            let style = if i % 2 == 0 {
-                Style::default().fg(Color::White)
-            } else {
+            let ready = opts.ready_rows.get(i).copied().unwrap_or(false);
+            let zebra = if props.zebra && i % 2 == 1 {
                 Style::default().fg(Color::Gray)
+            } else {
+                Style::default().fg(Color::White)
             };
-            Row::new(row.iter().cloned().map(Cell::from)).style(style)
+            let mark = if ready {
+                Cell::from(Span::styled("✓", check_style))
+            } else {
+                Cell::from(" ")
+            };
+            Row::new(std::iter::once(mark).chain((0..n_cols).map(|c| {
+                let raw = row.get(c).map(String::as_str).unwrap_or("");
+                let mut cell_style = zebra;
+                if props.highlight_column == Some(c) {
+                    cell_style = cell_style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
+                }
+                Cell::from(align_line(raw, col_align(&props, c), cell_style))
+            })))
+            .style(zebra)
         })
         .collect();
 
-    let widths = col_constraints(&props.headers, &props.rows, area.width);
+    let data_widths = col_constraints(&props.headers, &props.rows, area.width.saturating_sub(3));
+    let mut widths = vec![Constraint::Length(2)];
+    widths.extend(data_widths);
     let highlight = if opts.active {
         Style::default()
             .bg(Color::Yellow)
@@ -238,10 +275,11 @@ fn render_table(
     } else {
         Style::default().bg(Color::DarkGray).fg(Color::Cyan)
     };
+    let spacing = if props.compact { 0 } else { 1 };
     let table = Table::new(rows, widths)
         .header(header)
         .block(titled_block(title, border_tone(opts)))
-        .column_spacing(1)
+        .column_spacing(spacing)
         .row_highlight_style(highlight);
 
     let row_count = props.rows.len();
@@ -382,6 +420,58 @@ fn render_gauge(
     frame.render_widget(gauge, area);
 }
 
+fn looks_numeric(s: &str) -> bool {
+    s.trim().replace(',', "").parse::<f64>().is_ok()
+}
+
+fn col_align(props: &TableProps, col: usize) -> Alignment {
+    if let Some(a) = props
+        .align
+        .as_ref()
+        .and_then(|v| v.get(col))
+        .map(|s| s.as_str())
+    {
+        return match a {
+            "right" => Alignment::Right,
+            "center" => Alignment::Center,
+            _ => Alignment::Left,
+        };
+    }
+    if props.numeric_align {
+        let sample = props
+            .rows
+            .iter()
+            .find_map(|r| r.get(col))
+            .map(String::as_str);
+        if sample.is_some_and(looks_numeric) {
+            return Alignment::Right;
+        }
+    }
+    Alignment::Left
+}
+
+fn align_line(text: &str, align: Alignment, style: Style) -> Line<'static> {
+    Line::from(Span::styled(text.to_string(), style)).alignment(align)
+}
+
+fn chart_title(chunk: &TuiChunk, props: &ChartProps, opts: &ChunkRenderOpts) -> String {
+    let kind = kind_of(props);
+    let base = props
+        .title
+        .clone()
+        .unwrap_or_else(|| format!("◈ {}", chunk.widget_id));
+    let mut t = title_mark(opts, base);
+    if let (Some(s), Some(i)) = (opts.chart_series, opts.chart_index) {
+        if let Some((name, label, value, pct)) = selected_point(props, kind, s, i) {
+            t = match pct {
+                Some(p) => format!("{t} · {name} · {label}={value:.2} ({:.0}%)", p * 100.0),
+                None => format!("{t} · {name} · {label}={value:.2}"),
+            };
+        }
+    }
+    t
+}
+
 fn render_chart(
     frame: &mut Frame,
     area: ratatui::layout::Rect,
@@ -402,22 +492,20 @@ fn render_chart(
         return;
     }
 
-    let owned: Vec<Vec<(f64, f64)>> = props
-        .datasets
-        .iter()
-        .map(|ds| {
-            ds.data
-                .iter()
-                .enumerate()
-                .map(|(i, y)| (i as f64, *y))
-                .collect()
-        })
-        .collect();
+    match kind_of(&props) {
+        ChartKind::Bar => render_bar(frame, area, chunk, &props, opts),
+        ChartKind::Sparkline => render_sparkline(frame, area, chunk, &props, opts),
+        ChartKind::Pie => render_pie(frame, area, chunk, &props, opts),
+        ChartKind::Stacked => render_stacked(frame, area, chunk, &props, opts),
+        ChartKind::Line => render_line(frame, area, chunk, &props, opts),
+    }
+}
 
+fn y_bounds(owned: &[Vec<(f64, f64)>]) -> (f64, f64, f64) {
     let mut y_min = f64::INFINITY;
     let mut y_max = f64::NEG_INFINITY;
     let mut x_max = 1.0_f64;
-    for pts in &owned {
+    for pts in owned {
         for &(x, y) in pts {
             y_min = y_min.min(y);
             y_max = y_max.max(y);
@@ -433,10 +521,34 @@ fn render_chart(
         y_max += 1.0;
     }
     let pad = (y_max - y_min) * 0.08;
-    y_min -= pad;
-    y_max += pad;
+    (y_min - pad, y_max + pad, x_max)
+}
 
-    let datasets: Vec<Dataset> = props
+fn render_line(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    props: &ChartProps,
+    opts: &ChunkRenderOpts,
+) {
+    let owned: Vec<Vec<(f64, f64)>> = props
+        .datasets
+        .iter()
+        .map(|ds| {
+            ds.data
+                .iter()
+                .enumerate()
+                .map(|(i, y)| (i as f64, *y))
+                .collect()
+        })
+        .collect();
+    let (y_min, y_max, x_max) = y_bounds(&owned);
+    let graph = if kind_of(props) == ChartKind::Bar {
+        GraphType::Bar
+    } else {
+        GraphType::Line
+    };
+    let mut datasets: Vec<Dataset> = props
         .datasets
         .iter()
         .zip(owned.iter())
@@ -446,32 +558,47 @@ fn render_chart(
             Dataset::default()
                 .name(ds.name.clone())
                 .marker(Marker::Braille)
-                .graph_type(GraphType::Line)
+                .graph_type(graph)
                 .style(Style::default().fg(color))
                 .data(pts.as_slice())
         })
         .collect();
 
-    let title = title_mark(
-        opts,
-        props
-            .title
-            .clone()
-            .unwrap_or_else(|| format!("◈ {}", chunk.widget_id)),
-    );
+    let cursor: Vec<(f64, f64)> = if let (Some(s), Some(i)) = (opts.chart_series, opts.chart_index)
+    {
+        owned
+            .get(s)
+            .and_then(|pts| pts.get(i).copied())
+            .map(|p| vec![p])
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+    if !cursor.is_empty() {
+        datasets.push(
+            Dataset::default()
+                .name(" ")
+                .marker(Marker::Dot)
+                .graph_type(GraphType::Scatter)
+                .style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .data(cursor.as_slice()),
+        );
+    }
 
+    let title = chart_title(chunk, props, opts);
     let y_mid = (y_min + y_max) / 2.0;
+    let x_labels = x_axis_labels(props, x_max);
     let chart = Chart::new(datasets)
         .block(titled_block(title, border_tone(opts)))
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::DarkGray))
                 .bounds([0.0, x_max.max(1.0)])
-                .labels(vec![
-                    Span::raw("0"),
-                    Span::raw(format!("{:.0}", x_max / 2.0)),
-                    Span::raw(format!("{:.0}", x_max)),
-                ]),
+                .labels(x_labels),
         )
         .y_axis(
             Axis::default()
@@ -483,6 +610,443 @@ fn render_chart(
                     Span::raw(format!("{y_max:.1}")),
                 ]),
         );
-
     frame.render_widget(chart, area);
+}
+
+fn x_axis_labels(props: &ChartProps, x_max: f64) -> Vec<Span<'static>> {
+    let n = x_max.round() as usize;
+    let mid = n / 2;
+    vec![
+        Span::raw(category_label(props, 0)),
+        Span::raw(category_label(props, mid)),
+        Span::raw(category_label(props, n)),
+    ]
+}
+
+fn scale_u64(data: &[f64]) -> Vec<u64> {
+    let m = data.iter().copied().fold(0.0_f64, f64::max);
+    if m <= 0.0 {
+        return vec![0; data.len()];
+    }
+    data.iter()
+        .map(|v| ((v.max(0.0) / m) * 1000.0).round() as u64)
+        .collect()
+}
+
+fn scale_one(v: f64, max: f64) -> u64 {
+    if max <= 0.0 {
+        0
+    } else {
+        ((v.max(0.0) / max) * 1000.0).round() as u64
+    }
+}
+
+fn global_max(props: &ChartProps) -> f64 {
+    props
+        .datasets
+        .iter()
+        .flat_map(|d| d.data.iter().copied())
+        .fold(0.0_f64, f64::max)
+}
+
+fn render_bar(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    props: &ChartProps,
+    opts: &ChunkRenderOpts,
+) {
+    let n_series = series_count(props, ChartKind::Bar);
+    let n_pts = point_count(props, ChartKind::Bar);
+    if n_pts == 0 {
+        let p =
+            Paragraph::new("empty Chart").block(titled_block(&chunk.widget_id, border_tone(opts)));
+        frame.render_widget(p, area);
+        return;
+    }
+    let title = chart_title(chunk, props, opts);
+    let labels: Vec<String> = (0..n_pts).map(|i| category_label(props, i)).collect();
+    let max = global_max(props);
+
+    if n_series == 1 {
+        let raw = &props.datasets[0].data;
+        let bars: Vec<Bar> = labels
+            .iter()
+            .enumerate()
+            .map(|(i, lab)| {
+                let v = scale_one(raw.get(i).copied().unwrap_or(0.0), max);
+                let color = if opts.chart_index == Some(i) {
+                    Color::Yellow
+                } else {
+                    SERIES_COLORS[0]
+                };
+                Bar::default()
+                    .value(v)
+                    .label(Line::from(lab.clone()))
+                    .style(Style::default().fg(color))
+            })
+            .collect();
+        let chart = BarChart::default()
+            .block(titled_block(title, border_tone(opts)))
+            .bar_width(3)
+            .bar_gap(1)
+            .value_style(Style::default().fg(Color::White))
+            .label_style(Style::default().fg(Color::DarkGray))
+            .data(BarGroup::default().bars(&bars));
+        frame.render_widget(chart, area);
+        return;
+    }
+
+    let mut chart = BarChart::default()
+        .block(titled_block(title, border_tone(opts)))
+        .bar_width(2)
+        .bar_gap(1)
+        .group_gap(2)
+        .label_style(Style::default().fg(Color::DarkGray));
+    for i in 0..n_pts {
+        let bars: Vec<Bar> = props
+            .datasets
+            .iter()
+            .enumerate()
+            .map(|(s, ds)| {
+                let v = scale_one(ds.data.get(i).copied().unwrap_or(0.0), max);
+                let color = if opts.chart_index == Some(i) && opts.chart_series == Some(s) {
+                    Color::Yellow
+                } else {
+                    SERIES_COLORS[s % SERIES_COLORS.len()]
+                };
+                Bar::default().value(v).style(Style::default().fg(color))
+            })
+            .collect();
+        chart = chart.data(
+            BarGroup::default()
+                .label(Line::from(labels[i].clone()))
+                .bars(&bars),
+        );
+    }
+    frame.render_widget(chart, area);
+}
+
+fn render_sparkline(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    props: &ChartProps,
+    opts: &ChunkRenderOpts,
+) {
+    let data = props
+        .datasets
+        .first()
+        .map(|d| d.data.as_slice())
+        .unwrap_or(&[]);
+    if data.is_empty() {
+        let p =
+            Paragraph::new("empty Chart").block(titled_block(&chunk.widget_id, border_tone(opts)));
+        frame.render_widget(p, area);
+        return;
+    }
+    let scaled = scale_u64(data);
+    let bars: Vec<SparklineBar> = scaled
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let mut b = SparklineBar::from(*v);
+            if opts.chart_index == Some(i) {
+                b = SparklineBar::from(*v).style(Some(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            b
+        })
+        .collect();
+    let spark = Sparkline::default()
+        .block(titled_block(
+            chart_title(chunk, props, opts),
+            border_tone(opts),
+        ))
+        .data(bars)
+        .style(Style::default().fg(SERIES_COLORS[0]));
+    frame.render_widget(spark, area);
+}
+
+fn render_pie(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    props: &ChartProps,
+    opts: &ChunkRenderOpts,
+) {
+    let slices = pie_slices(props);
+    let sum: f64 = slices.iter().map(|s| s.value).sum();
+    let title = chart_title(chunk, props, opts);
+    let block = titled_block(title, border_tone(opts));
+    if slices.is_empty() || sum <= 0.0 {
+        frame.render_widget(Paragraph::new("empty Chart").block(block), area);
+        return;
+    }
+
+    let inner_h = area.height.saturating_sub(2);
+    if inner_h < 8 {
+        render_pie_bar(frame, area, &slices, sum, opts, block);
+        return;
+    }
+
+    frame.render_widget(block, area);
+    let inner = ratatui::layout::Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    if inner.width < 4 || inner.height < 3 {
+        return;
+    }
+    let legend_w = inner
+        .width
+        .saturating_div(2)
+        .max(12)
+        .min(inner.width.saturating_sub(8));
+    let pie_w = inner.width.saturating_sub(legend_w);
+    let pie_area = ratatui::layout::Rect {
+        x: inner.x,
+        y: inner.y,
+        width: pie_w,
+        height: inner.height,
+    };
+    let legend_area = ratatui::layout::Rect {
+        x: inner.x.saturating_add(pie_w),
+        y: inner.y,
+        width: legend_w,
+        height: inner.height,
+    };
+    paint_pie_disk(frame, pie_area, &slices, sum, opts.chart_index);
+    paint_pie_legend(frame, legend_area, &slices, sum, opts.chart_index);
+}
+
+fn render_pie_bar(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    slices: &[crate::chart::ChartSlice],
+    sum: f64,
+    opts: &ChunkRenderOpts,
+    block: Block<'static>,
+) {
+    frame.render_widget(block, area);
+    let inner = ratatui::layout::Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let buf = frame.buffer_mut();
+    let mut x = inner.x;
+    let bar_y = inner.y;
+    for (i, sl) in slices.iter().enumerate() {
+        let w = ((sl.value / sum) * f64::from(inner.width)).round() as u16;
+        let w = w
+            .max(if sl.value > 0.0 { 1 } else { 0 })
+            .min(inner.x + inner.width - x);
+        let color = if opts.chart_index == Some(i) {
+            Color::Yellow
+        } else {
+            SERIES_COLORS[i % SERIES_COLORS.len()]
+        };
+        for dx in 0..w {
+            if let Some(cell) = buf.cell_mut((x + dx, bar_y)) {
+                cell.set_char('█');
+                cell.set_fg(color);
+            }
+        }
+        x = x.saturating_add(w);
+        if x >= inner.x + inner.width {
+            break;
+        }
+    }
+    let legend_y = inner
+        .y
+        .saturating_add(2)
+        .min(inner.y + inner.height.saturating_sub(1));
+    paint_pie_legend(
+        frame,
+        ratatui::layout::Rect {
+            x: inner.x,
+            y: legend_y,
+            width: inner.width,
+            height: inner.height.saturating_sub(2),
+        },
+        slices,
+        sum,
+        opts.chart_index,
+    );
+}
+
+fn paint_pie_disk(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    slices: &[crate::chart::ChartSlice],
+    sum: f64,
+    selected: Option<usize>,
+) {
+    let buf = frame.buffer_mut();
+    let cx = f64::from(area.x) + f64::from(area.width) / 2.0;
+    let cy = f64::from(area.y) + f64::from(area.height) / 2.0;
+    let rx = f64::from(area.width) / 2.0 - 0.5;
+    let ry = f64::from(area.height) / 2.0 - 0.5;
+    if rx <= 0.0 || ry <= 0.0 {
+        return;
+    }
+    let mut thresholds = Vec::new();
+    let mut acc = 0.0;
+    for sl in slices {
+        acc += sl.value / sum;
+        thresholds.push(acc);
+    }
+    for row in 0..area.height {
+        for col in 0..area.width {
+            let x = f64::from(area.x + col) + 0.5;
+            let y = f64::from(area.y + row) + 0.5;
+            let dx = (x - cx) / rx;
+            let dy = (y - cy) / ry;
+            if dx * dx + dy * dy > 1.0 {
+                continue;
+            }
+            let mut angle = dy.atan2(dx);
+            if angle < 0.0 {
+                angle += std::f64::consts::TAU;
+            }
+            let t = angle / std::f64::consts::TAU;
+            let idx = thresholds
+                .iter()
+                .position(|th| t <= *th)
+                .unwrap_or(slices.len().saturating_sub(1));
+            let color = if selected == Some(idx) {
+                Color::Yellow
+            } else {
+                SERIES_COLORS[idx % SERIES_COLORS.len()]
+            };
+            if let Some(cell) = buf.cell_mut((area.x + col, area.y + row)) {
+                cell.set_char('●');
+                cell.set_fg(color);
+            }
+        }
+    }
+}
+
+fn paint_pie_legend(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    slices: &[crate::chart::ChartSlice],
+    sum: f64,
+    selected: Option<usize>,
+) {
+    let lines: Vec<Line> = slices
+        .iter()
+        .enumerate()
+        .map(|(i, sl)| {
+            let pct = sl.value / sum * 100.0;
+            let mark = if selected == Some(i) { "▸" } else { " " };
+            let color = if selected == Some(i) {
+                Color::Yellow
+            } else {
+                SERIES_COLORS[i % SERIES_COLORS.len()]
+            };
+            Line::from(Span::styled(
+                format!("{mark} {}  {:.1}  ({pct:.0}%)", sl.name, sl.value),
+                Style::default().fg(color),
+            ))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn render_stacked(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    chunk: &TuiChunk,
+    props: &ChartProps,
+    opts: &ChunkRenderOpts,
+) {
+    let n_pts = point_count(props, ChartKind::Stacked);
+    let n_series = series_count(props, ChartKind::Stacked);
+    let title = chart_title(chunk, props, opts);
+    let block = titled_block(title, border_tone(opts));
+    if n_pts == 0 {
+        frame.render_widget(Paragraph::new("empty Chart").block(block), area);
+        return;
+    }
+    frame.render_widget(block, area);
+    let inner = ratatui::layout::Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(3),
+    };
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let mut stacks = vec![0.0_f64; n_pts];
+    for ds in &props.datasets {
+        for (i, v) in ds.data.iter().enumerate().take(n_pts) {
+            stacks[i] += v.max(0.0);
+        }
+    }
+    let max_stack = stacks.iter().copied().fold(0.0_f64, f64::max).max(1.0);
+    let col_w = (inner.width / n_pts as u16).max(1);
+    let buf = frame.buffer_mut();
+    for i in 0..n_pts {
+        let x0 = inner.x + i as u16 * col_w;
+        let mut y_top = inner.y + inner.height;
+        for s in 0..n_series {
+            let v = props
+                .datasets
+                .get(s)
+                .and_then(|d| d.data.get(i))
+                .copied()
+                .unwrap_or(0.0)
+                .max(0.0);
+            let h = ((v / max_stack) * f64::from(inner.height)).round() as u16;
+            if h == 0 && v > 0.0 {
+                continue;
+            }
+            let selected = opts.chart_index == Some(i) && opts.chart_series == Some(s);
+            let color = if selected {
+                Color::Yellow
+            } else {
+                SERIES_COLORS[s % SERIES_COLORS.len()]
+            };
+            for _ in 0..h {
+                if y_top <= inner.y {
+                    break;
+                }
+                y_top -= 1;
+                for dx in 0..col_w.saturating_sub(1).max(1) {
+                    if let Some(cell) = buf.cell_mut((x0 + dx, y_top)) {
+                        cell.set_char('█');
+                        cell.set_fg(color);
+                    }
+                }
+            }
+        }
+        let lab = category_label(props, i);
+        let ly = area.y + area.height.saturating_sub(2);
+        for (k, ch) in lab
+            .chars()
+            .take(col_w.saturating_sub(1) as usize)
+            .enumerate()
+        {
+            if let Some(cell) = buf.cell_mut((x0 + k as u16, ly)) {
+                cell.set_char(ch);
+                cell.set_fg(if opts.chart_index == Some(i) {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                });
+            }
+        }
+    }
 }
