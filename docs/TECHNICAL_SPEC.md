@@ -23,10 +23,12 @@ Web / React / Scene Graph are **removed**. The only client is `tui/`.
 
 ## 3. Contract — TuiManifest
 
-Schema: `packages/tui-shared/schemas/tui-manifest.schema.json`.
+Schema (source of truth): `packages/tui-shared/schemas/tui-manifest.schema.json`.
 
 Types: `Paragraph`, `Table`, `List`, `Gauge`, `Chart` (`props.kind`: `line` | `bar` | `sparkline` | `pie` | `stacked`).  
 Layout: `direction` + `chunks[]` (`widgetId`, `type`, integer `size`, `props`).
+
+**Drift guard:** golden fixtures live in `packages/tui-shared/tests/fixtures/` (`hello.tui.json`, `charts.tui.json`, `detail_w_table_0.json`). TS runs AJV via `validateTuiManifest`; Rust deserializes the same files in `tui/tests/fixture_json.rs`. Change order: schema → TS types → Rust `model.rs`.
 
 USER_ACTION: `select_row` (Table), `select_point` (Chart), `navigate_back`, `command` `/details` | `/prompt`.
 

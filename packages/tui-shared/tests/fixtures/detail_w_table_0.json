@@ -1,0 +1,40 @@
+{
+  "taskId": "detail_w_table_0",
+  "operation": "SYNC_DASHBOARD",
+  "layout": {
+    "direction": "vertical",
+    "chunks": [
+      {
+        "widgetId": "w_detail_title",
+        "type": "Paragraph",
+        "size": 3,
+        "props": {
+          "title": "C1 · Manifest Contract",
+          "text": "Row 0 · w_table · session demo",
+          "style": "magenta"
+        }
+      },
+      {
+        "widgetId": "w_detail_sources",
+        "type": "Table",
+        "size": 5,
+        "props": {
+          "title": "Three copies",
+          "headers": ["layer", "path", "role"],
+          "rows": [
+            ["JSON Schema", "packages/tui-shared/schemas/tui-manifest.schema.json", "AJV validation"],
+            ["TypeScript", "packages/tui-shared/src/types.ts", "Node backend, CLI, bridge"],
+            ["Rust", "tui/src/model.rs", "Ratatui deserialize/render"]
+          ],
+          "highlightColumn": 0
+        }
+      },
+      {
+        "widgetId": "w_detail_gauge",
+        "type": "Gauge",
+        "size": 1,
+        "props": { "title": "Drift risk", "ratio": 0.85, "label": "high" }
+      }
+    ]
+  }
+}

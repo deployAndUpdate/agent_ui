@@ -1,0 +1,60 @@
+{
+  "taskId": "req_hello",
+  "operation": "SYNC_DASHBOARD",
+  "layout": {
+    "direction": "vertical",
+    "chunks": [
+      {
+        "widgetId": "w_header",
+        "type": "Paragraph",
+        "size": 3,
+        "props": {
+          "title": "Visual Engine TUI",
+          "text": "Hello — clone, ./install, ./vae --demo. Push manifests with npm run agent.",
+          "style": "cyan"
+        }
+      },
+      {
+        "widgetId": "w_gauge",
+        "type": "Gauge",
+        "size": 1,
+        "props": { "title": "Ready", "ratio": 1, "label": "100%" }
+      },
+      {
+        "widgetId": "w_table",
+        "type": "Table",
+        "size": 6,
+        "props": {
+          "title": "Setup",
+          "headers": ["step", "command"],
+          "rows": [
+            ["1", "./install"],
+            ["2", "./vae --demo"],
+            ["3", "npm run agent -- submit --session demo --file examples/hello.tui.json"]
+          ],
+          "highlightColumn": 0
+        }
+      },
+      {
+        "widgetId": "w_list",
+        "type": "List",
+        "size": 4,
+        "props": {
+          "title": "Widgets",
+          "items": ["Paragraph", "Table", "List", "Gauge", "Chart (line/bar/sparkline/pie/stacked)"]
+        }
+      },
+      {
+        "widgetId": "w_chart",
+        "type": "Chart",
+        "size": 6,
+        "props": {
+          "kind": "line",
+          "title": "Sample series",
+          "labels": ["1", "2", "3", "4", "5", "6", "7"],
+          "datasets": [{ "name": "demo", "data": [1, 3, 2, 5, 4, 7, 6] }]
+        }
+      }
+    ]
+  }
+}

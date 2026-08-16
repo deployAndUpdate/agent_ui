@@ -1,5 +1,14 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { validateTuiManifest } from '../src/validateTuiManifest.js';
+
+const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const contractFixtures = fs
+  .readdirSync(fixturesDir)
+  .filter((f) => f.endsWith('.json'))
+  .sort();
 
 const canonicalManifest = {
   taskId: 'task_7749',
@@ -173,5 +182,14 @@ describe('validateTuiManifest', () => {
       },
     });
     expect(result.ok).toBe(false);
+  });
+
+  it.each(contractFixtures)('contract fixture %s passes AJV', (file) => {
+    const raw = fs.readFileSync(path.join(fixturesDir, file), 'utf8');
+    const payload = JSON.parse(raw) as unknown;
+    const result = validateTuiManifest(payload);
+    expect(result.ok, result.ok ? '' : (result as { errors: string[] }).errors.join('; ')).toBe(
+      true,
+    );
   });
 });
