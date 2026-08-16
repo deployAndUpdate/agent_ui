@@ -9,9 +9,7 @@ use ratatui::widgets::{
 use ratatui::Frame;
 
 use crate::content_measure::{table_col_maxes, wrap_line_count};
-use crate::model::{
-    ChartProps, GaugeProps, ListProps, ParagraphProps, TableProps, TuiChunk,
-};
+use crate::model::{ChartProps, GaugeProps, ListProps, ParagraphProps, TableProps, TuiChunk};
 
 const SERIES_COLORS: [Color; 6] = [
     Color::Cyan,
@@ -23,7 +21,7 @@ const SERIES_COLORS: [Color; 6] = [
 ];
 
 pub struct ChunkRenderOpts {
-    /// Idle Tab focus (cyan).
+    /// Idle / DetailScreen Tab focus (cyan).
     pub focused: bool,
     /// Browse / TableInteract yellow hover.
     pub hovered: bool,
@@ -75,7 +73,9 @@ fn titled_block(title: impl Into<String>, tone: BorderTone) -> Block<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         BorderTone::Cyan => (
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -129,13 +129,12 @@ fn render_paragraph(
     chunk: &TuiChunk,
     opts: &ChunkRenderOpts,
 ) {
-    let props: ParagraphProps = serde_json::from_value(chunk.props.clone()).unwrap_or(
-        ParagraphProps {
+    let props: ParagraphProps =
+        serde_json::from_value(chunk.props.clone()).unwrap_or(ParagraphProps {
             text: chunk.props.to_string(),
             title: Some(chunk.widget_id.clone()),
             style: None,
-        },
-    );
+        });
     let color = style_name_to_color(props.style.as_deref());
     let title = title_mark(
         opts,
@@ -197,8 +196,8 @@ fn render_table(
     opts: &ChunkRenderOpts,
 ) {
     let Ok(props) = serde_json::from_value::<TableProps>(chunk.props.clone()) else {
-        let p =
-            Paragraph::new("invalid Table props").block(titled_block(&chunk.widget_id, border_tone(opts)));
+        let p = Paragraph::new("invalid Table props")
+            .block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
@@ -284,8 +283,8 @@ fn render_list(
     opts: &ChunkRenderOpts,
 ) {
     let Ok(props) = serde_json::from_value::<ListProps>(chunk.props.clone()) else {
-        let p =
-            Paragraph::new("invalid List props").block(titled_block(&chunk.widget_id, border_tone(opts)));
+        let p = Paragraph::new("invalid List props")
+            .block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
@@ -321,10 +320,10 @@ fn render_list(
     let visible = area.height.saturating_sub(2).max(1) as usize;
     let max_off = n.saturating_sub(visible);
     let offset = (opts.scroll as usize).min(max_off);
-    let selected = props
-        .selected_index
-        .unwrap_or(offset)
-        .clamp(offset, (offset + visible.saturating_sub(1)).min(n.saturating_sub(1)));
+    let selected = props.selected_index.unwrap_or(offset).clamp(
+        offset,
+        (offset + visible.saturating_sub(1)).min(n.saturating_sub(1)),
+    );
     let mut state = ListState::default()
         .with_offset(offset)
         .with_selected(if n > 0 { Some(selected) } else { None });
@@ -349,8 +348,8 @@ fn render_gauge(
     opts: &ChunkRenderOpts,
 ) {
     let Ok(props) = serde_json::from_value::<GaugeProps>(chunk.props.clone()) else {
-        let p =
-            Paragraph::new("invalid Gauge props").block(titled_block(&chunk.widget_id, border_tone(opts)));
+        let p = Paragraph::new("invalid Gauge props")
+            .block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
@@ -390,14 +389,15 @@ fn render_chart(
     opts: &ChunkRenderOpts,
 ) {
     let Ok(props) = serde_json::from_value::<ChartProps>(chunk.props.clone()) else {
-        let p =
-            Paragraph::new("invalid Chart props").block(titled_block(&chunk.widget_id, border_tone(opts)));
+        let p = Paragraph::new("invalid Chart props")
+            .block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     };
 
     if props.datasets.is_empty() {
-        let p = Paragraph::new("empty Chart").block(titled_block(&chunk.widget_id, border_tone(opts)));
+        let p =
+            Paragraph::new("empty Chart").block(titled_block(&chunk.widget_id, border_tone(opts)));
         frame.render_widget(p, area);
         return;
     }

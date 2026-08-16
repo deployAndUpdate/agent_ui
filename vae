@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Visual Engine — run backend (+ TUI) as a local utility.
+# Visual Engine — run backend + agent daemon (+ TUI) as a local utility.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -11,9 +11,14 @@ cd "$ROOT"
 SESSION="${TUI_SESSION_ID:-${SESSION_ID:-demo}}"
 API="${VISUAL_ENGINE_API:-http://127.0.0.1:3001}"
 PORT="${PORT:-3001}"
+BRIDGE_HOST="${TUI_BRIDGE_HOST:-127.0.0.1}"
+BRIDGE_PORT="${TUI_BRIDGE_PORT:-9090}"
+export TUI_AGENT_WEBHOOK_URL="${TUI_AGENT_WEBHOOK_URL:-http://${BRIDGE_HOST}:${BRIDGE_PORT}/agent}"
 RUN_DIR="$ROOT/.app-run"
 PID_BACKEND="$RUN_DIR/backend.pid"
 LOG_BACKEND="$RUN_DIR/backend.log"
+PID_BRIDGE="$RUN_DIR/bridge.pid"
+LOG_BRIDGE="$RUN_DIR/bridge.log"
 DEMO=0
 NO_TUI=0
 MODE=up
@@ -21,12 +26,12 @@ MODE=up
 usage() {
   cat <<'EOF'
 Usage:
-  ./vae                 start backend + TUI (foreground TUI when interactive)
+  ./vae                 start backend + agent daemon + TUI
   ./vae --demo          start, push examples/hello.tui.json, then TUI
-  ./vae --no-tui        backend only
+  ./vae --no-tui        backend + agent daemon (no TUI)
   ./vae stop | status | smoke
 
-Env: see .env.example (PORT, TUI_SESSION_ID, API_KEYS, DATABASE_URL, …)
+Env: see .env.example (PORT, TUI_SESSION_ID, API_KEYS, DATABASE_URL, CURSOR_API_KEY, …)
 EOF
 }
 
@@ -84,6 +89,22 @@ wait_health() {
   return 1
 }
 
+wait_bridge_health() {
+  local url="http://${BRIDGE_HOST}:${BRIDGE_PORT}/health"
+  echo -n "waiting for $url …"
+  for _ in $(seq 1 80); do
+    if curl -sf "$url" >/dev/null 2>&1; then
+      echo " ok"
+      return 0
+    fi
+    echo -n "."
+    sleep 0.25
+  done
+  echo
+  echo "agent daemon unhealthy; see $LOG_BRIDGE" >&2
+  return 1
+}
+
 start_backend() {
   if is_alive "$PID_BACKEND"; then
     echo "backend already running (pid $(cat "$PID_BACKEND"))"
@@ -103,12 +124,28 @@ start_backend() {
   wait_health
 }
 
+start_bridge() {
+  if is_alive "$PID_BRIDGE"; then
+    echo "agent daemon already running (pid $(cat "$PID_BRIDGE"))"
+    return 0
+  fi
+  if curl -sf "http://${BRIDGE_HOST}:${BRIDGE_PORT}/health" >/dev/null 2>&1; then
+    echo "agent daemon already listening (external)"
+    return 0
+  fi
+  echo "starting agent daemon → $LOG_BRIDGE"
+  setsid npm run bridge >"$LOG_BRIDGE" 2>&1 < /dev/null &
+  echo $! >"$PID_BRIDGE"
+  wait_bridge_health
+}
+
 push_demo() {
   echo "pushing examples/hello.tui.json → session=$SESSION"
   npm run agent -- submit --session "$SESSION" --file "$ROOT/examples/hello.tui.json"
 }
 
 cmd_stop() {
+  kill_pidfile "$PID_BRIDGE" "agent daemon"
   kill_pidfile "$PID_BACKEND" "backend"
   echo "done"
 }
@@ -117,12 +154,20 @@ cmd_status() {
   if is_alive "$PID_BACKEND"; then echo "backend: running pid=$(cat "$PID_BACKEND")"; else echo "backend: stopped"; fi
   if curl -sf "$API/health" >/dev/null 2>&1; then echo "api: $API healthy"; else echo "api: not reachable"; fi
   if curl -sf "$API/ready" >/dev/null 2>&1; then echo "ready: ok"; else echo "ready: not ok"; fi
+  if is_alive "$PID_BRIDGE"; then echo "daemon: running pid=$(cat "$PID_BRIDGE")"; else echo "daemon: stopped"; fi
+  if curl -sf "http://${BRIDGE_HOST}:${BRIDGE_PORT}/health" >/dev/null 2>&1; then
+    echo "daemon health: $(curl -sf "http://${BRIDGE_HOST}:${BRIDGE_PORT}/health")"
+  else
+    echo "daemon health: not reachable"
+  fi
 }
 
 cmd_smoke() {
   start_backend
+  start_bridge
   curl -sf "$API/health" >/dev/null
   curl -sf "$API/ready" >/dev/null
+  curl -sf "http://${BRIDGE_HOST}:${BRIDGE_PORT}/health" >/dev/null
   npm run agent -- submit --session "$SESSION" --file "$ROOT/examples/hello.tui.json" >/dev/null
   curl -sf "$API/api/v1/tui/session/$SESSION" >/dev/null
   echo "smoke OK (session=$SESSION)"
@@ -134,11 +179,13 @@ case "$MODE" in
   smoke) cmd_smoke ;;
   up)
     start_backend
+    start_bridge
     if [[ "$DEMO" == "1" ]]; then
       push_demo
     fi
     if [[ "$NO_TUI" == "1" ]]; then
-      echo "backend only · session=$SESSION"
+      echo "backend + agent daemon · session=$SESSION"
+      echo "webhook: $TUI_AGENT_WEBHOOK_URL"
       echo "submit: npm run agent -- submit --session $SESSION --file examples/hello.tui.json"
       echo "tui:    TUI_SESSION_ID=$SESSION npm run dev:tui"
       echo "stop:   ./vae stop"
@@ -146,7 +193,7 @@ case "$MODE" in
     fi
     export TUI_SESSION_ID="$SESSION"
     export TUI_WS_URL="${TUI_WS_URL:-ws://127.0.0.1:${PORT}/api/v1/tui/stream?sessionId=${SESSION}}"
-    echo "backend up · TUI session=$SESSION (q to quit TUI; then ./vae stop)"
+    echo "backend + daemon up · TUI session=$SESSION (q to quit TUI; then ./vae stop)"
     if [[ -x "$ROOT/tui/target/release/vae-tui" ]]; then
       exec "$ROOT/tui/target/release/vae-tui"
     else

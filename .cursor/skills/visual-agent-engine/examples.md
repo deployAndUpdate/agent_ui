@@ -69,6 +69,15 @@ npm run agent -- submit --session demo --file /tmp/vae-manifest.tui.json
 User: "Build a sales dashboard for session demo"
 
 1. Optionally GET `/api/v1/tui/session/demo`
-2. Write a TUI SYNC manifest
+2. Write a TUI SYNC manifest (include a `Table` if row drill-down is needed)
 3. `npm run agent -- submit --session demo --file .vae/manifest.tui.json`
 4. Reply: `TUI_SESSION_ID=demo npm run dev:tui` or `./vae`
+5. Optional: tell user keys — `i` browse · Enter open table · Enter row detail · Esc back · `q` quit
+
+## Custom detail (reactor off)
+
+```bash
+TUI_ACTION_REACTOR=off ./vae
+```
+
+On `select_row`, submit a detail `SYNC_DASHBOARD`; on `navigate_back`, resubmit the board.

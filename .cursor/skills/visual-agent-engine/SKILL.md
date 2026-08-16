@@ -2,46 +2,40 @@
 name: visual-agent-engine
 description: >-
   Builds and publishes Server-Driven UI dashboards via Visual Agent Engine TUI
-  track (TuiManifest → AJV → /api/v1/tui/manifest → Ratatui). Use when the user
-  asks to create/update a dashboard, widgets, Paragraph, Table, List, Gauge,
-  Chart, SDUI UI, visual-engine, TUI, or to push a manifest to the Visual Agent
-  Engine / visual-agent CLI.
+  (TuiManifest → AJV → /api/v1/tui/manifest → Ratatui). Use when the user asks to
+  create/update a dashboard, widgets, Paragraph, Table, List, Gauge, Chart,
+  SDUI, visual-engine, TUI, USER_ACTION, select_row, navigate_back, or to push a
+  manifest via visual-agent / vae-agent CLI.
 ---
 
 # Visual Agent Engine (TUI only)
 
-Never generate raw HTML/JS/React. Emit a **TuiManifest** JSON and submit it to the TUI API/CLI. The client is Ratatui (`npm run dev:tui`).
+Never generate HTML/JS/React. Emit a **TuiManifest** JSON and submit it to the TUI API/CLI. Client: Ratatui (`./vae` or `npm run dev:tui`).
 
 ## Prerequisites
 
 From repo root `visual_engine`:
 
 1. `./install` (once) — Node, npm ci, release `vae-tui`
-2. Backend+TUI: `./vae` or `./vae --demo`
-3. Optional auth: `X-API-Key` / `VISUAL_ENGINE_API_KEY` when `AUTH_ENABLED=true`
+2. Backend + agent daemon + TUI: `./vae` or `./vae --demo` (`GET http://127.0.0.1:9090/health`)`
+3. Auth (optional): `X-API-Key` / `VISUAL_ENGINE_API_KEY` when `AUTH_ENABLED=true`
 
 ## Workflow (always)
 
 ```
 Task:
 - [ ] 1. Choose sessionId
-- [ ] 2. Write TuiManifest JSON (schema-valid)
+- [ ] 2. Write schema-valid TuiManifest JSON
 - [ ] 3. Submit via CLI (self-healing) or curl
-- [ ] 4. On 400: fix from errors[], resubmit
-- [ ] 5. Tell user to view npm run dev:tui (same sessionId)
+- [ ] 4. On 400: fix errors[], resubmit
+- [ ] 5. Tell user how to view (same sessionId)
 ```
 
 ### 1. Session
 
 - Default `sessionId`: `demo` (or user-provided)
-- No web `version` lock — last-write-wins
-- Optional check:
-
-```bash
-curl -s "http://127.0.0.1:3001/api/v1/tui/session/<SESSION>"
-```
-
-404 → empty session.
+- Last-write-wins (no web `version` lock)
+- Check: `curl -s "http://127.0.0.1:3001/api/v1/tui/session/<SESSION>"` — 404 = empty
 
 ### 2. Write the manifest
 
@@ -51,12 +45,12 @@ Save e.g. `./.vae/manifest.tui.json`.
 
 - `operation`: `SYNC_DASHBOARD` | `ADD_WIDGET` | `UPDATE_WIDGET` | `REMOVE_WIDGET`
 - Chunk `type`: only `Paragraph` | `Table` | `List` | `Gauge` | `Chart`
-- Chunk `size`: positive integer (row weight / height hint) — **not** `{w,h}`
-- Required: `widgetId`, `type`, `size`, `props`
+- Chunk `size`: positive integer (height hint) — **not** `{w,h}`
+- Required per chunk: `widgetId`, `type`, `size`, `props`
 - `layout.direction`: `vertical` | `horizontal`
-- Props: [reference.md](reference.md)
 - Prefer `SYNC_DASHBOARD` for a full board
-- **Dumb templates** — all text/numbers come from `props`
+- **Dumb templates** — all text/numbers live in `props`
+- Props detail: [reference.md](reference.md)
 
 ```json
 {
@@ -76,7 +70,7 @@ Save e.g. `./.vae/manifest.tui.json`.
 }
 ```
 
-More: [examples.md](examples.md).
+More boards: [examples.md](examples.md).
 
 ### 3. Submit (preferred CLI)
 
@@ -86,9 +80,7 @@ npm run agent -- submit \
   --file <PATH_TO_TUI_MANIFEST.json>
 ```
 
-Self-Healing on HTTP 400 (up to 3). Prefer a valid manifest first.
-
-Raw HTTP:
+Self-healing on HTTP 400 (up to 3). Prefer a valid manifest first.
 
 ```bash
 curl -s http://127.0.0.1:3001/api/v1/tui/manifest \
@@ -106,32 +98,36 @@ curl -s http://127.0.0.1:3001/api/v1/tui/manifest \
 
 Always return:
 
-- How to view: `TUI_SESSION_ID=<SESSION> npm run dev:tui`
+- How to view: `TUI_SESSION_ID=<SESSION> npm run dev:tui` (or `./vae`)
 - `sessionId`, `taskId`, operation
-- Brief list of chunks
+- Brief list of chunks (`widgetId` + `type`)
 
-## Interaction
+## Interaction (USER_ACTION)
 
-WS or `POST /api/v1/tui/action`:
+Client or HTTP `POST /api/v1/tui/action`:
 
 ```json
 {
   "event": "USER_ACTION",
   "taskId": "req_...",
-  "widgetId": "w_results",
+  "widgetId": "w_table",
   "action": "select_row",
-  "payload": { "rowIndex": 0 }
+  "payload": { "rowIndex": 0, "row": ["..."] }
 }
 ```
 
-When reacting: push a new `SYNC_DASHBOARD` / delta with updated chunks.
+| action | Effect (builtin reactor) |
+|--------|---------------------------|
+| `select_row` | Push ephemeral detail board (`taskId` `detail_<widgetId>_<row>`); TUI auto-sends `/details` |
+| `navigate_back` | Re-publish session board |
+| `command` `/details` | POST agent webhook (`systemPrompt`: `more details`); agent SYNC enriched detail |
+| `command` `/prompt` | POST webhook with user prompt + focused widget; daemon merges chunks. `payload.scope=detail` (ephemeral `detail_*`) or `board` (persists session board) |
 
-Builtin reactor (`TUI_ACTION_REACTOR=builtin`, default):
+`TUI_ACTION_REACTOR=builtin` (default) for select_row/navigate_back. Set `off` to only record those. `/details` and `/prompt` always use `TUI_AGENT_WEBHOOK_URL` when set.
 
-- `select_row` → detail screen (Paragraph fields from table headers/row)
-- `navigate_back` → restore previous board
+For custom detail screens: listen for `select_row`, then `SYNC_DASHBOARD` with your own chunks; handle `navigate_back` the same way or leave builtin on.
 
-Set `TUI_ACTION_REACTOR=off` to only record actions (external agent reacts).
+TUI keys (Idle/`p` on board, browse → table → Enter → auto `/details` → `i` + arrows on detail → `p`): [reference.md](reference.md#tui-navigation).
 
 ## Do / Don't
 
@@ -139,11 +135,14 @@ Set `TUI_ACTION_REACTOR=off` to only record actions (external agent reacts).
 |----|-------|
 | TUI types only | MetricCard / DataChart / React / HTML |
 | `layout.chunks` + integer `size` | `layout.widgets` + `{w,h}` |
-| CLI or `/api/v1/tui/manifest` | Claim UI updated without 200 |
+| CLI or `/api/v1/tui/manifest` | Claim UI updated without HTTP 200 |
 
 ## Repo map
 
 - Schema: `packages/tui-shared/schemas/tui-manifest.schema.json`
 - CLI: `packages/cli` (`npm run agent -- submit ...`)
 - Client: `tui/` (Ratatui)
+- Reactor: `backend/src/tui/actions/reactToUserAction.ts`
+- Webhook: `backend/src/tui/actions/agentWebhook.ts`
+- Daemon: `packages/tui-agent-bridge` — `./vae` starts it; `/details` and `/prompt` use a warm SDK agent when `CURSOR_API_KEY` is set
 - Spec: `docs/TECHNICAL_SPEC.md`

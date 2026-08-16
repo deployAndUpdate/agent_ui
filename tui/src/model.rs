@@ -1,7 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TuiManifest {
     pub task_id: String,
@@ -10,7 +10,7 @@ pub struct TuiManifest {
     pub layout: TuiLayout,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TuiLayout {
     #[serde(default = "default_direction")]
     pub direction: String,
@@ -21,7 +21,7 @@ fn default_direction() -> String {
     "vertical".into()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TuiChunk {
     pub widget_id: String,

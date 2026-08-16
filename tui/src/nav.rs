@@ -6,10 +6,38 @@ use crate::model::{TableProps, TuiChunk};
 pub enum NavMode {
     Idle,
     Browse,
-    TableInteract { widget_id: String, row: usize },
-    AwaitDetail { widget_id: String, row: usize },
-    DetailScreen { from_widget: String },
-    AwaitBoard { from_widget: String },
+    TableInteract {
+        widget_id: String,
+        row: usize,
+    },
+    AwaitDetail {
+        widget_id: String,
+        row: usize,
+    },
+    DetailScreen {
+        from_widget: String,
+    },
+    /// Browse-like yellow hover + arrow paging on the detail board (`i` from DetailScreen).
+    DetailBrowse {
+        from_widget: String,
+    },
+    PromptInsert {
+        from_widget: String,
+        focused_widget: Option<String>,
+        buffer: String,
+        error: Option<String>,
+        scope: PromptScope,
+        resume_browse: bool,
+    },
+    AwaitEnrich {
+        from_widget: String,
+        command: String,
+        scope: PromptScope,
+        resume_browse: bool,
+    },
+    AwaitBoard {
+        from_widget: String,
+    },
 }
 
 impl NavMode {
@@ -20,20 +48,72 @@ impl NavMode {
             Self::TableInteract { .. } => "table",
             Self::AwaitDetail { .. } => "await-detail",
             Self::DetailScreen { .. } => "detail",
+            Self::DetailBrowse { .. } => "detail-browse",
+            Self::PromptInsert { .. } => "prompt",
+            Self::AwaitEnrich { .. } => "await-enrich",
             Self::AwaitBoard { .. } => "await-board",
         }
     }
 
     pub fn is_browse_like(&self) -> bool {
-        matches!(self, Self::Browse)
+        matches!(self, Self::Browse | Self::DetailBrowse { .. })
     }
 
     pub fn is_waiting(&self) -> bool {
-        matches!(self, Self::AwaitDetail { .. } | Self::AwaitBoard { .. })
+        matches!(
+            self,
+            Self::AwaitDetail { .. } | Self::AwaitBoard { .. } | Self::AwaitEnrich { .. }
+        )
+    }
+
+    pub fn prompt_buffer(&self) -> Option<&str> {
+        match self {
+            Self::PromptInsert { buffer, .. } => Some(buffer.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn prompt_error(&self) -> Option<&str> {
+        match self {
+            Self::PromptInsert { error, .. } => error.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn is_typing(&self) -> bool {
+        matches!(self, Self::PromptInsert { .. })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PromptScope {
+    Board,
+    #[default]
+    Detail,
+}
+
+impl PromptScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Board => "board",
+            Self::Detail => "detail",
+        }
     }
 }
 
 pub const PAGE_STEP: u16 = 5;
+pub const DETAILS_SYSTEM_PROMPT: &str = "more details";
+
+pub fn detail_cache_key(widget_id: &str, row: usize) -> String {
+    format!("{widget_id}:{row}")
+}
+
+/// After the builtin stub lands, send `/details` once (not on later agent callbacks).
+pub fn should_auto_details(before: &NavMode, after: &NavMode, already_sent: bool) -> bool {
+    !already_sent
+        && matches!(before, NavMode::AwaitDetail { .. })
+        && matches!(after, NavMode::DetailScreen { .. })
+}
 
 /// Pick chunk index that best intersects the top third of the viewport.
 pub fn hover_from_viewport(
@@ -59,13 +139,11 @@ pub fn hover_from_viewport(
         if vis_bottom <= vis_top {
             continue;
         }
-        // Prefer chunks overlapping [0, band_end)
         let overlap_top = vis_top.max(0);
         let overlap_bottom = vis_bottom.min(i32::from(band_end));
         let score = if overlap_bottom > overlap_top {
             overlap_bottom - overlap_top + 1000
         } else {
-            // fallback: first visible
             vis_bottom - vis_top
         };
         match best {
@@ -104,9 +182,12 @@ mod tests {
 
     #[test]
     fn hover_picks_top_visible() {
-        let chunks = vec![chunk("a", "Paragraph"), chunk("b", "Table"), chunk("c", "List")];
+        let chunks = vec![
+            chunk("a", "Paragraph"),
+            chunk("b", "Table"),
+            chunk("c", "List"),
+        ];
         let heights = vec![10u16, 10, 10];
-        // scrolled so b is at top of viewport
         let idx = hover_from_viewport(&chunks, &heights, 10, 20);
         assert_eq!(idx, Some(1));
     }
@@ -122,10 +203,62 @@ mod tests {
             .label(),
             "table"
         );
+        assert_eq!(
+            NavMode::PromptInsert {
+                from_widget: "w".into(),
+                focused_widget: None,
+                buffer: "hello".into(),
+                error: None,
+                scope: PromptScope::Board,
+                resume_browse: false,
+            }
+            .label(),
+            "prompt"
+        );
+        assert_eq!(
+            NavMode::DetailBrowse {
+                from_widget: "w".into()
+            }
+            .label(),
+            "detail-browse"
+        );
+        assert!(NavMode::DetailBrowse {
+            from_widget: "w".into()
+        }
+        .is_browse_like());
     }
 
     #[test]
     fn page_step_matches_plan() {
         assert_eq!(PAGE_STEP, 5);
+    }
+
+    #[test]
+    fn auto_details_only_once_after_stub() {
+        let before = NavMode::AwaitDetail {
+            widget_id: "w_table".into(),
+            row: 0,
+        };
+        let after = NavMode::DetailScreen {
+            from_widget: "w_table".into(),
+        };
+        assert!(should_auto_details(&before, &after, false));
+        assert!(!should_auto_details(&before, &after, true));
+        let enrich = NavMode::AwaitEnrich {
+            from_widget: "w_table".into(),
+            command: "/details".into(),
+            scope: PromptScope::Detail,
+            resume_browse: false,
+        };
+        let after_agent = NavMode::DetailScreen {
+            from_widget: "w_table".into(),
+        };
+        assert!(!should_auto_details(&enrich, &after_agent, true));
+        assert!(!should_auto_details(&enrich, &after_agent, false));
+    }
+
+    #[test]
+    fn cache_key_is_stable() {
+        assert_eq!(detail_cache_key("w_table", 3), "w_table:3");
     }
 }

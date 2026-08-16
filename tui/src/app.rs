@@ -12,9 +12,9 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use crate::action::UserAction;
+use crate::action::{CommandMeta, DetailCtx, UserAction};
 use crate::model::{ServerEvent, WsStatus};
-use crate::nav::{table_row_cells, NavMode, PAGE_STEP};
+use crate::nav::{table_row_cells, NavMode, PromptScope, PAGE_STEP};
 use crate::net::spawn_ws_client;
 use crate::ui::{draw, sync_viewport, UiState};
 
@@ -63,10 +63,75 @@ impl App {
             .unwrap_or_else(|| "unknown".into())
     }
 
+    fn command_widget_id(&self, fallback: &str) -> String {
+        self.state
+            .focused_widget_id()
+            .or_else(|| {
+                self.state
+                    .detail_ctx
+                    .as_ref()
+                    .map(|c| c.source_widget_id.clone())
+                    .filter(|s| !s.is_empty())
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                if fallback.is_empty() {
+                    self.state
+                        .manifest
+                        .as_ref()
+                        .and_then(|m| m.layout.chunks.first())
+                        .map(|c| c.widget_id.clone())
+                        .unwrap_or_else(|| "board".into())
+                } else {
+                    fallback.to_string()
+                }
+            })
+    }
+
+    fn fire_command(&mut self, command: &str, user_prompt: Option<String>) {
+        let from_widget = match &self.state.nav {
+            NavMode::DetailScreen { from_widget }
+            | NavMode::DetailBrowse { from_widget }
+            | NavMode::AwaitEnrich { from_widget, .. }
+            | NavMode::PromptInsert { from_widget, .. } => from_widget.clone(),
+            _ => String::new(),
+        };
+        let widget_id = self.command_widget_id(&from_widget);
+        let scope = match &self.state.nav {
+            NavMode::PromptInsert { scope, .. } | NavMode::AwaitEnrich { scope, .. } => *scope,
+            NavMode::Idle | NavMode::Browse => PromptScope::Board,
+            _ => PromptScope::Detail,
+        };
+        let focused_widget_id = match &self.state.nav {
+            NavMode::PromptInsert { focused_widget, .. } => focused_widget.clone(),
+            _ => self.state.focused_widget_id(),
+        };
+        let meta = CommandMeta {
+            user_prompt,
+            focused_widget_id,
+            focused_chunk: self.state.focused_chunk_json(),
+            current_detail: self.state.current_detail_json(),
+            scope,
+        };
+        let action = UserAction::command(
+            self.task_id(),
+            widget_id,
+            command,
+            self.state.detail_ctx.as_ref(),
+            Some(&meta),
+        );
+        self.state.enter_await_enrich(command);
+        self.send_action(action);
+    }
+
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
-        // q always quits
-        if matches!(code, KeyCode::Char('q')) {
+        // q quits except while typing a prompt (allow literal q in buffer)
+        if matches!(code, KeyCode::Char('q')) && !self.state.nav.is_typing() {
             return true;
+        }
+
+        if matches!(self.state.nav, NavMode::AwaitEnrich { .. }) {
+            return false;
         }
 
         if self.state.nav.is_waiting() {
@@ -77,8 +142,12 @@ impl App {
             NavMode::Idle => self.handle_idle_key(code, modifiers),
             NavMode::Browse => self.handle_browse_key(code, modifiers),
             NavMode::TableInteract { .. } => self.handle_table_key(code),
-            NavMode::DetailScreen { .. } => self.handle_detail_key(code),
-            NavMode::AwaitDetail { .. } | NavMode::AwaitBoard { .. } => false,
+            NavMode::DetailScreen { .. } => self.handle_detail_key(code, modifiers),
+            NavMode::DetailBrowse { .. } => self.handle_detail_browse_key(code, modifiers),
+            NavMode::PromptInsert { .. } => self.handle_prompt_key(code),
+            NavMode::AwaitDetail { .. }
+            | NavMode::AwaitBoard { .. }
+            | NavMode::AwaitEnrich { .. } => false,
         }
     }
 
@@ -87,9 +156,10 @@ impl App {
             KeyCode::Char('i') => {
                 self.state.enter_browse();
             }
-            KeyCode::Esc => {
-                // Idle: Esc no longer quits (only q).
+            KeyCode::Char('p') => {
+                self.state.open_prompt_insert();
             }
+            KeyCode::Esc => {}
             KeyCode::Tab => self.state.focus_next(),
             KeyCode::BackTab => self.state.focus_prev(),
             KeyCode::Char('j') | KeyCode::Down => self.state.scroll_focused(1),
@@ -122,10 +192,12 @@ impl App {
             KeyCode::Esc => {
                 self.state.nav = NavMode::Idle;
             }
+            KeyCode::Char('p') => {
+                self.state.open_prompt_insert();
+            }
             KeyCode::Enter => {
                 self.state.try_activate_hovered();
             }
-            // Arrows = same as PgUp/PgDn
             KeyCode::Down | KeyCode::Up => {
                 let dir = if code == KeyCode::Down { 1 } else { -1 };
                 self.state.page_scroll_by(dir * PAGE_STEP as i32);
@@ -146,7 +218,6 @@ impl App {
                 };
                 self.state.page_scroll_by(-(step as i32));
             }
-            // Keep existing action keys working
             KeyCode::Tab => self.state.focus_next(),
             KeyCode::BackTab => self.state.focus_prev(),
             KeyCode::Char('j') => self.state.scroll_focused(1),
@@ -182,6 +253,16 @@ impl App {
                                 .and_then(|c| table_row_cells(c, row))
                         })
                         .unwrap_or_default();
+                    self.state.detail_ctx = Some(DetailCtx {
+                        source_widget_id: widget_id.clone(),
+                        row_index: Some(row),
+                        row: cells.clone(),
+                    });
+                    if let Some(cached) = self.state.cached_detail(&widget_id, row) {
+                        self.state.show_cached_detail(widget_id, cached);
+                        return false;
+                    }
+                    self.state.details_auto_sent = false;
                     let action =
                         UserAction::select_row(self.task_id(), widget_id.clone(), row, cells);
                     self.send_action(action);
@@ -193,15 +274,102 @@ impl App {
         false
     }
 
-    fn handle_detail_key(&mut self, code: KeyCode) -> bool {
+    fn handle_detail_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         match code {
+            KeyCode::Char('i') => {
+                self.state.enter_detail_browse();
+            }
+            KeyCode::Char('p') => {
+                self.state.open_prompt_insert();
+            }
             KeyCode::Esc => {
                 if let NavMode::DetailScreen { from_widget } = &self.state.nav {
                     let from_widget = from_widget.clone();
-                    self.send_action(UserAction::navigate_back(self.task_id(), from_widget.clone()));
+                    self.send_action(UserAction::navigate_back(
+                        self.task_id(),
+                        from_widget.clone(),
+                    ));
                     self.state.nav = NavMode::AwaitBoard { from_widget };
                 }
             }
+            KeyCode::Tab => self.state.focus_next(),
+            KeyCode::BackTab => self.state.focus_prev(),
+            KeyCode::Char('[') => self.state.focus_prev(),
+            KeyCode::Char(']') => self.state.focus_next(),
+            KeyCode::Char('j') | KeyCode::Down => self.state.scroll_focused(1),
+            KeyCode::Char('k') | KeyCode::Up => self.state.scroll_focused(-1),
+            KeyCode::PageDown => {
+                let step = if modifiers.contains(KeyModifiers::SHIFT) {
+                    1
+                } else {
+                    PAGE_STEP
+                };
+                self.state.page_scroll_by(step as i32);
+            }
+            KeyCode::PageUp => {
+                let step = if modifiers.contains(KeyModifiers::SHIFT) {
+                    1
+                } else {
+                    PAGE_STEP
+                };
+                self.state.page_scroll_by(-(step as i32));
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn handle_detail_browse_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.state.leave_detail_browse();
+            }
+            KeyCode::Char('p') => {
+                self.state.open_prompt_insert();
+            }
+            KeyCode::Down | KeyCode::Up => {
+                let dir = if code == KeyCode::Down { 1 } else { -1 };
+                self.state.page_scroll_by(dir * PAGE_STEP as i32);
+            }
+            KeyCode::PageDown => {
+                let step = if modifiers.contains(KeyModifiers::SHIFT) {
+                    1
+                } else {
+                    PAGE_STEP
+                };
+                self.state.page_scroll_by(step as i32);
+            }
+            KeyCode::PageUp => {
+                let step = if modifiers.contains(KeyModifiers::SHIFT) {
+                    1
+                } else {
+                    PAGE_STEP
+                };
+                self.state.page_scroll_by(-(step as i32));
+            }
+            KeyCode::Tab => self.state.focus_next(),
+            KeyCode::BackTab => self.state.focus_prev(),
+            KeyCode::Char('j') => self.state.scroll_focused(1),
+            KeyCode::Char('k') => self.state.scroll_focused(-1),
+            KeyCode::Char('[') => self.state.focus_prev(),
+            KeyCode::Char(']') => self.state.focus_next(),
+            _ => {}
+        }
+        false
+    }
+
+    fn handle_prompt_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.state.prompt_cancel();
+            }
+            KeyCode::Enter => {
+                if let Ok(text) = self.state.prompt_try_submit() {
+                    self.fire_command("/prompt", Some(text));
+                }
+            }
+            KeyCode::Backspace => self.state.prompt_backspace(),
+            KeyCode::Char(c) if !c.is_control() => self.state.prompt_push_char(c),
             _ => {}
         }
         false
@@ -216,9 +384,10 @@ impl App {
 
         loop {
             let size = terminal.size()?;
+            let constraints = vec![Constraint::Min(3), Constraint::Length(1)];
             let body_chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(3), Constraint::Length(1)])
+                .constraints(constraints)
                 .split(ratatui::layout::Rect {
                     x: 0,
                     y: 0,
@@ -250,6 +419,9 @@ impl App {
                     match maybe_msg {
                         Some(ServerEvent::RenderManifest(m)) => {
                             self.state.set_manifest(m);
+                            if self.state.consume_auto_details() {
+                                self.fire_command("/details", None);
+                            }
                             self.state.status = WsStatus::Live;
                         }
                         Some(ServerEvent::Status(s)) => {
