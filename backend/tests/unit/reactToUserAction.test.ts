@@ -40,6 +40,36 @@ describe('reactToUserAction', () => {
     );
   });
 
+  it('select_point pushes ephemeral detail with unique taskId', async () => {
+    await store.saveSessionWithOutbox({ sessionId: 's1', manifest: board });
+    const { reacted } = await reactToUserAction({
+      sessionId: 's1',
+      action: {
+        event: 'USER_ACTION',
+        taskId: board.taskId,
+        widgetId: 'w_pie',
+        action: 'select_point',
+        payload: {
+          kind: 'pie',
+          seriesIndex: 0,
+          seriesName: 'share',
+          pointIndex: 2,
+          label: 'EMEA',
+          value: 42,
+          percent: 0.31,
+        },
+      },
+      store,
+    });
+    expect(reacted).toBe(true);
+    const snap = await store.getSession('s1');
+    expect(snap?.manifest.taskId).toBe(board.taskId);
+    const pending = await store.listPendingOutbox();
+    const detailEvent = pending.find((e) => e.payload.taskId === 'detail_w_pie_s0_i2');
+    expect(detailEvent).toBeDefined();
+    expect(detailEvent?.payload.taskId.startsWith('detail_')).toBe(true);
+  });
+
   it('navigate_back re-publishes session board', async () => {
     await store.saveSessionWithOutbox({ sessionId: 's1', manifest: board });
 

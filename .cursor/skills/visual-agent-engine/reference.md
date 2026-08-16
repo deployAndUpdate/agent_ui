@@ -43,7 +43,8 @@ Optional: `title`, `style` (`default` \| `cyan` \| `green` \| `yellow` \| `red` 
 
 ### Table
 
-Required: `headers` (string[]), `rows` (string[][])
+Required: `headers` (string[]), `rows` (string[][])  
+Optional: `title`, `align` (`left`|`right`|`center` per column), `numericAlign` (default true — right-align numeric columns when `align` is omitted), `zebra` (default true), `compact`, `highlightColumn` (0-based)
 
 Interactive: in TUI, `i` → browse → yellow hover → `Enter` activates Table → row select → `Enter` sends `select_row`. Prefer stable ids like `w_table` / `w_results`.
 
@@ -60,17 +61,26 @@ Optional: `title`, `label`
 ### Chart
 
 Required: `datasets` — `[{ "name", "data": number[] }]`  
-Optional: `title`
+Optional: `title`, `kind` (`line` \| `bar` \| `sparkline` \| `pie` \| `stacked`, default `line`), `labels` (x-axis / categories / pie slices)
+
+Data:
+
+- line / bar / sparkline / stacked: each dataset is a series; X is index or `labels[i]`
+- stacked: same-length series; each X is a stacked column
+- pie: one series + `labels` (`data[i]` = slice), or N series with a single value each (`name` + `data[0]`). Negatives become 0.
+
+Interactive: Browse hover → `Enter` → ChartInteract (`←`/`→` point, `↑`/`↓` series; pie is points only) → `Enter` sends `select_point`. Builtin reactor pushes ephemeral `detail_<widgetId>_s<series>_i<index>` then TUI auto `/details` (cached like table rows).
 
 ## TUI navigation
 
-Modes: `Idle` (`p` prompt on the root board) → `i` → `Browse` (`p` prompt) → `Enter` on Table → `TableInteract` → `Enter` on row → stub detail → auto `/details` (cached on later visits) → `i` browse on detail → `Tab` / `p` → `Esc` back.
+Modes: `Idle` (`p` prompt on the root board) → `i` → `Browse` (`p` prompt) → `Enter` on Table or Chart → interact → `Enter` → stub detail → auto `/details` (cached on later visits) → `i` browse on detail → `Tab` / `p` → `Esc` back.
 
 | Mode | Keys | UI |
 |------|------|-----|
 | Idle | `i` browse; `p` prompt; Tab/`[` `]` focus; ↑↓/`jk` widget scroll; PgUp/PgDn page; `q` quit | cyan Tab focus |
-| Browse | ↑↓ = page (±5, same as PgUp/PgDn); `p` prompt; Enter open Table; Esc → Idle | yellow hover |
-| Table | ↑↓/`jk` row; Enter → `select_row`; Esc → Browse | yellow border + row |
+| Browse | ↑↓ = page (±5, same as PgUp/PgDn); `p` prompt; Enter open Table or Chart; Esc → Idle | yellow hover |
+| Table | ↑↓/`jk` row; Enter → `select_row`; Esc → Browse | yellow border + row; green `✓` if detail is cached |
+| Chart | ←→/`hl` point; ↑↓/`jk` series (not pie); Enter → `select_point`; Esc → Browse | yellow cursor |
 | Detail | `i` browse; Tab/`[` `]` focus; `p` prompt; Esc → `navigate_back`; `q` quit | cyan Tab focus |
 | DetailBrowse | ↑↓ page (yellow hover); `p` prompt; Esc → Detail | yellow hover |
 | Prompt | type; Enter send; Esc cancel (`q` is a letter) | overlay text box |
@@ -87,7 +97,7 @@ POST /api/v1/tui/manifest
 { "sessionId": "<same>", "manifest": { "taskId": "detail_…", "operation": "SYNC_DASHBOARD", "layout": { ... } } }
 ```
 
-Keep `taskId` prefix `detail_` so the TUI stays on DetailScreen. Backend treats `detail_*` POSTs as **ephemeral** (outbox only; session board unchanged). The TUI caches the enriched board per table row (`widgetId:row`); reopening that row shows the cache and does not re-send `/details`. Detail `/prompt` updates the cache. Root-board `/prompt` is **not** cached as a detail overlay.
+Keep `taskId` prefix `detail_` so the TUI stays on DetailScreen. Backend treats `detail_*` POSTs as **ephemeral** (outbox only; session board unchanged). The TUI caches the enriched board per table row (`widgetId:row`); reopening that row shows the cache and does not re-send `/details`. On the root board, cached rows show a green `✓`. Detail `/prompt` updates the cache. Root-board `/prompt` is **not** cached as a detail overlay.
 
 ## Prompt command `/prompt`
 
@@ -102,7 +112,7 @@ Webhook `command` is `/prompt`. `systemPrompt` / `userPrompt` is the typed text.
 Any agent that accepts the webhook JSON and POSTs a TuiManifest to `callback.manifestUrl` works
 (Cursor, Claude Code, OpenCode, custom). Use `detail_*` for ephemeral detail overlays; other `taskId`s persist the root board. Optional helper:
 
-`./vae` starts the daemon on `:9090`. Default driver `auto`: warm Cursor SDK (`Agent.create` + `send`) when `CURSOR_API_KEY` is set, otherwise in-process stub. Health: `GET http://127.0.0.1:9090/health`.
+`./vae` starts the daemon on `:9090`. Default driver `auto`: warm Cursor SDK (`Agent.create` + `send`) when `CURSOR_API_KEY` is set, otherwise in-process stub. Invalid LLM JSON is sent back with the parse/AJV error (up to 3 tries) before callback. Health: `GET http://127.0.0.1:9090/health`.
 
 ```bash
 export TUI_AGENT_WEBHOOK_URL=http://127.0.0.1:9090/agent

@@ -9,6 +9,7 @@ import {
   normalizeDetailManifest,
   normalizePatchManifest,
 } from './parseManifest.js';
+import { parseLlmWithRetry } from './retryJson.js';
 import { SessionQueue } from './queue.js';
 import {
   currentDetailFromBody,
@@ -165,11 +166,10 @@ export class DaemonRuntime {
       };
     }
 
-    const text = await this.runLlm(body, buildEnrichPrompt(body));
-    return {
-      kind: 'manifest',
-      manifest: normalizeDetailManifest(text, body.taskId),
-    };
+    const manifest = await this.llmUntilValid(body, buildEnrichPrompt(body), (text) =>
+      normalizeDetailManifest(text, body.taskId),
+    );
+    return { kind: 'manifest', manifest };
   }
 
   private async runPrompt(body: AgentWebhookBody): Promise<JobResult> {
@@ -194,20 +194,39 @@ export class DaemonRuntime {
       };
     }
 
-    const text = await this.runLlm(body, buildPromptFollowUp(body));
-    const patch = normalizePatchManifest(text, body.taskId, { forceDetail });
+    const patch = await this.llmUntilValid(
+      body,
+      buildPromptFollowUp(body),
+      (text) => normalizePatchManifest(text, body.taskId, { forceDetail }),
+    );
     return {
       kind: 'manifest',
       manifest: mergeDetailChunks(current, patch, forceDetail),
     };
   }
 
+  /** Re-prompt the LLM with AJV/parse errors until the JSON is schema-valid. */
+  private async llmUntilValid(
+    body: AgentWebhookBody,
+    initialPrompt: string,
+    parse: (text: string) => TuiManifest,
+  ): Promise<TuiManifest> {
+    return parseLlmWithRetry({
+      send: (prompt) => this.runLlm(body, prompt),
+      initialPrompt,
+      parse,
+      maxAttempts: this.cfg.jsonRetries,
+      onRetry: (attempt, error) => {
+        console.warn(
+          `[bridge] json invalid session=${body.sessionId} attempt=${attempt}/${this.cfg.jsonRetries}: ${error}`,
+        );
+      },
+    });
+  }
+
   private async runLlm(body: AgentWebhookBody, prompt: string): Promise<string> {
     if (this.cfg.driver === 'exec') {
-      return runExecDriver(
-        { ...body, systemPrompt: body.systemPrompt || prompt },
-        this.cfg,
-      );
+      return runExecDriver(body, this.cfg, prompt);
     }
     if (this.cfg.driver === 'sdk') {
       if (!this.sdk) this.sdk = new SdkAgentPool(this.cfg);

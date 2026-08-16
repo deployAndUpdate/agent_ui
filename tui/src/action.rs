@@ -19,6 +19,7 @@ pub struct DetailCtx {
     pub source_widget_id: String,
     pub row_index: Option<usize>,
     pub row: Vec<String>,
+    pub cache_slot: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -45,6 +46,36 @@ impl UserAction {
             payload: serde_json::json!({
                 "rowIndex": row_index,
                 "row": row,
+            }),
+        }
+    }
+
+    pub fn select_point(
+        task_id: impl Into<String>,
+        widget_id: impl Into<String>,
+        kind: &str,
+        series_index: usize,
+        series_name: &str,
+        point_index: usize,
+        label: &str,
+        value: f64,
+        percent: Option<f64>,
+    ) -> Self {
+        Self {
+            event: "USER_ACTION",
+            task_id: task_id.into(),
+            widget_id: widget_id.into(),
+            action: "select_point".into(),
+            payload: serde_json::json!({
+                "kind": kind,
+                "seriesIndex": series_index,
+                "seriesName": series_name,
+                "pointIndex": point_index,
+                "label": label,
+                "value": value,
+                "percent": percent,
+                "rowIndex": point_index,
+                "row": [series_name, label, value.to_string()],
             }),
         }
     }
@@ -181,10 +212,14 @@ pub fn on_manifest_received(mode: &mut crate::nav::NavMode, manifest: &TuiManife
                 }
             }
         }
-        NavMode::Idle | NavMode::Browse | NavMode::TableInteract { .. } => {
+        NavMode::Idle
+        | NavMode::Browse
+        | NavMode::TableInteract { .. }
+        | NavMode::ChartInteract { .. } => {
             if is_detail {
                 let from_widget = match mode {
-                    NavMode::TableInteract { widget_id, .. } => widget_id.clone(),
+                    NavMode::TableInteract { widget_id, .. }
+                    | NavMode::ChartInteract { widget_id, .. } => widget_id.clone(),
                     _ => String::new(),
                 };
                 *mode = NavMode::DetailScreen { from_widget };
@@ -334,6 +369,7 @@ mod tests {
                 source_widget_id: "w_table".into(),
                 row_index: Some(1),
                 row: vec!["a".into(), "b".into()],
+                cache_slot: "1".into(),
             }),
             None,
         );
@@ -353,6 +389,7 @@ mod tests {
                 source_widget_id: "w_table".into(),
                 row_index: Some(0),
                 row: vec!["x".into()],
+                cache_slot: "0".into(),
             }),
             Some(&CommandMeta {
                 user_prompt: Some("add a list of facts".into()),
@@ -409,5 +446,27 @@ mod tests {
         on_manifest_received(&mut after, &m);
         assert!(should_auto_details(&stub_before, &after, false));
         assert!(!should_auto_details(&stub_before, &after, true));
+    }
+
+    #[test]
+    fn select_point_payload() {
+        let a = UserAction::select_point(
+            "task_1",
+            "w_pie",
+            "pie",
+            0,
+            "share",
+            2,
+            "EMEA",
+            42.0,
+            Some(0.31),
+        );
+        assert_eq!(a.action, "select_point");
+        assert_eq!(a.payload["kind"], "pie");
+        assert_eq!(a.payload["seriesIndex"], 0);
+        assert_eq!(a.payload["pointIndex"], 2);
+        assert_eq!(a.payload["label"], "EMEA");
+        assert_eq!(a.payload["value"], 42.0);
+        assert_eq!(a.payload["percent"], 0.31);
     }
 }

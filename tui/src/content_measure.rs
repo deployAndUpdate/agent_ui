@@ -1,6 +1,7 @@
 //! Measure widget content to pick layout heights and table column widths.
 
-use crate::model::{ListProps, ParagraphProps, TableProps, TuiChunk};
+use crate::chart::{kind_of, ChartKind};
+use crate::model::{ChartProps, ListProps, ParagraphProps, TableProps, TuiChunk};
 
 const BORDER: u16 = 2;
 
@@ -54,7 +55,17 @@ pub fn content_height(chunk: &TuiChunk, term_width: u16) -> u16 {
             BORDER.saturating_add(n.max(1))
         }
         "Gauge" => 3,
-        "Chart" => chunk.size.clamp(10, 18),
+        "Chart" => {
+            let kind = serde_json::from_value::<ChartProps>(chunk.props.clone())
+                .ok()
+                .map(|p| kind_of(&p))
+                .unwrap_or(ChartKind::Line);
+            match kind {
+                ChartKind::Sparkline => 3,
+                ChartKind::Pie => chunk.size.clamp(8, 16),
+                _ => chunk.size.clamp(10, 18),
+            }
+        }
         _ => chunk.size.clamp(3, 10),
     }
 }
@@ -63,7 +74,16 @@ pub fn content_height(chunk: &TuiChunk, term_width: u16) -> u16 {
 pub fn allocated_height(chunk: &TuiChunk, term_width: u16, viewport_h: u16) -> u16 {
     let min_h = match chunk.widget_type.as_str() {
         "Gauge" => 3,
-        "Chart" => 8,
+        "Chart" => {
+            let kind = serde_json::from_value::<ChartProps>(chunk.props.clone())
+                .ok()
+                .map(|p| kind_of(&p))
+                .unwrap_or(ChartKind::Line);
+            match kind {
+                ChartKind::Sparkline => 3,
+                _ => 8,
+            }
+        }
         "Table" => 5,
         "List" => 4,
         "Paragraph" => 3,

@@ -13,6 +13,7 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use crate::action::{CommandMeta, DetailCtx, UserAction};
+use crate::chart::{chart_cache_slot, kind_of, props_from_chunk, selected_point, table_cache_slot};
 use crate::model::{ServerEvent, WsStatus};
 use crate::nav::{table_row_cells, NavMode, PromptScope, PAGE_STEP};
 use crate::net::spawn_ws_client;
@@ -142,6 +143,7 @@ impl App {
             NavMode::Idle => self.handle_idle_key(code, modifiers),
             NavMode::Browse => self.handle_browse_key(code, modifiers),
             NavMode::TableInteract { .. } => self.handle_table_key(code),
+            NavMode::ChartInteract { .. } => self.handle_chart_key(code),
             NavMode::DetailScreen { .. } => self.handle_detail_key(code, modifiers),
             NavMode::DetailBrowse { .. } => self.handle_detail_browse_key(code, modifiers),
             NavMode::PromptInsert { .. } => self.handle_prompt_key(code),
@@ -257,8 +259,11 @@ impl App {
                         source_widget_id: widget_id.clone(),
                         row_index: Some(row),
                         row: cells.clone(),
+                        cache_slot: table_cache_slot(row),
                     });
-                    if let Some(cached) = self.state.cached_detail(&widget_id, row) {
+                    if let Some(cached) =
+                        self.state.cached_detail(&widget_id, table_cache_slot(row))
+                    {
                         self.state.show_cached_detail(widget_id, cached);
                         return false;
                     }
@@ -267,6 +272,77 @@ impl App {
                         UserAction::select_row(self.task_id(), widget_id.clone(), row, cells);
                     self.send_action(action);
                     self.state.nav = NavMode::AwaitDetail { widget_id, row };
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+
+    fn handle_chart_key(&mut self, code: KeyCode) -> bool {
+        match code {
+            KeyCode::Esc => {
+                self.state.nav = NavMode::Browse;
+                self.state.recompute_hover();
+            }
+            KeyCode::Left | KeyCode::Char('h') => self.state.chart_move_index(-1),
+            KeyCode::Right | KeyCode::Char('l') => self.state.chart_move_index(1),
+            KeyCode::Up | KeyCode::Char('k') => self.state.chart_move_series(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.state.chart_move_series(1),
+            KeyCode::Enter => {
+                if let NavMode::ChartInteract {
+                    widget_id,
+                    series,
+                    index,
+                } = &self.state.nav
+                {
+                    let widget_id = widget_id.clone();
+                    let series = *series;
+                    let index = *index;
+                    let Some(props) = self
+                        .state
+                        .manifest
+                        .as_ref()
+                        .and_then(|m| m.layout.chunks.iter().find(|c| c.widget_id == widget_id))
+                        .and_then(props_from_chunk)
+                    else {
+                        return false;
+                    };
+                    let kind = kind_of(&props);
+                    let Some((series_name, label, value, percent)) =
+                        selected_point(&props, kind, series, index)
+                    else {
+                        return false;
+                    };
+                    let slot = chart_cache_slot(series, index);
+                    let row = vec![series_name.clone(), label.clone(), value.to_string()];
+                    self.state.detail_ctx = Some(DetailCtx {
+                        source_widget_id: widget_id.clone(),
+                        row_index: Some(index),
+                        row: row.clone(),
+                        cache_slot: slot.clone(),
+                    });
+                    if let Some(cached) = self.state.cached_detail(&widget_id, &slot) {
+                        self.state.show_cached_detail(widget_id, cached);
+                        return false;
+                    }
+                    self.state.details_auto_sent = false;
+                    let action = UserAction::select_point(
+                        self.task_id(),
+                        widget_id.clone(),
+                        kind.as_str(),
+                        series,
+                        &series_name,
+                        index,
+                        &label,
+                        value,
+                        percent,
+                    );
+                    self.send_action(action);
+                    self.state.nav = NavMode::AwaitDetail {
+                        widget_id,
+                        row: index,
+                    };
                 }
             }
             _ => {}

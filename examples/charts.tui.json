@@ -1,0 +1,96 @@
+{
+  "taskId": "req_chart_kinds",
+  "operation": "SYNC_DASHBOARD",
+  "layout": {
+    "direction": "vertical",
+    "chunks": [
+      {
+        "widgetId": "w_header",
+        "type": "Paragraph",
+        "size": 2,
+        "props": {
+          "title": "Chart kinds",
+          "text": "Browse (i) then Enter on a chart. ←→ point · ↑↓ series · Enter detail.",
+          "style": "cyan"
+        }
+      },
+      {
+        "widgetId": "w_table",
+        "type": "Table",
+        "size": 6,
+        "props": {
+          "title": "Regions",
+          "headers": ["id", "region", "share"],
+          "rows": [
+            ["1", "EMEA", "42"],
+            ["2", "AMER", "31"],
+            ["3", "APAC", "27"]
+          ],
+          "numericAlign": true,
+          "zebra": true,
+          "highlightColumn": 0
+        }
+      },
+      {
+        "widgetId": "w_line",
+        "type": "Chart",
+        "size": 8,
+        "props": {
+          "kind": "line",
+          "title": "Weekly sales",
+          "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+          "datasets": [
+            { "name": "sales", "data": [12, 18, 15, 22, 28, 25, 30] },
+            { "name": "target", "data": [15, 15, 16, 20, 24, 24, 28] }
+          ]
+        }
+      },
+      {
+        "widgetId": "w_bar",
+        "type": "Chart",
+        "size": 8,
+        "props": {
+          "kind": "bar",
+          "title": "By region",
+          "labels": ["EMEA", "AMER", "APAC"],
+          "datasets": [{ "name": "share", "data": [42, 31, 27] }]
+        }
+      },
+      {
+        "widgetId": "w_spark",
+        "type": "Chart",
+        "size": 3,
+        "props": {
+          "kind": "sparkline",
+          "title": "Latency",
+          "datasets": [{ "name": "p95", "data": [12, 14, 11, 18, 16, 13, 12, 15] }]
+        }
+      },
+      {
+        "widgetId": "w_pie",
+        "type": "Chart",
+        "size": 10,
+        "props": {
+          "kind": "pie",
+          "title": "Share",
+          "labels": ["EMEA", "AMER", "APAC"],
+          "datasets": [{ "name": "share", "data": [42, 31, 27] }]
+        }
+      },
+      {
+        "widgetId": "w_stacked",
+        "type": "Chart",
+        "size": 8,
+        "props": {
+          "kind": "stacked",
+          "title": "Mix",
+          "labels": ["Q1", "Q2", "Q3", "Q4"],
+          "datasets": [
+            { "name": "new", "data": [10, 12, 14, 18] },
+            { "name": "renew", "data": [20, 18, 22, 24] }
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -15,7 +15,19 @@
         "type": "array",
         "items": { "type": "string" }
       }
-    }
+    },
+    "title": { "type": "string" },
+    "align": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["left", "right", "center"]
+      }
+    },
+    "numericAlign": { "type": "boolean", "default": true },
+    "zebra": { "type": "boolean", "default": true },
+    "compact": { "type": "boolean" },
+    "highlightColumn": { "type": "integer", "minimum": 0 }
   },
   "required": ["headers", "rows"]
 }

@@ -25,8 +25,10 @@ Web / React / Scene Graph are **removed**. The only client is `tui/`.
 
 Schema: `packages/tui-shared/schemas/tui-manifest.schema.json`.
 
-Types: `Paragraph`, `Table`, `List`, `Gauge`, `Chart`.  
+Types: `Paragraph`, `Table`, `List`, `Gauge`, `Chart` (`props.kind`: `line` | `bar` | `sparkline` | `pie` | `stacked`).  
 Layout: `direction` + `chunks[]` (`widgetId`, `type`, integer `size`, `props`).
+
+USER_ACTION: `select_row` (Table), `select_point` (Chart), `navigate_back`, `command` `/details` | `/prompt`.
 
 ## 4. API
 
@@ -48,3 +50,5 @@ Tables: `tui_sessions`, `tui_outbox`, `tui_actions`, `tui_idempotency_keys` (`ba
 ## 6. Self-Healing
 
 CLI (`npm run agent -- submit`) on HTTP 400 repairs common mistakes (`widgets`→`chunks`, `{w,h}`→`size`, unknown type→`Paragraph`) and retries.
+
+The Express API does **not** call an LLM. `/details` and `/prompt` go to the agent daemon (`packages/tui-agent-bridge`). If the model returns invalid JSON, the daemon sends the parse/AJV error back on the same agent session (up to `TUI_BRIDGE_JSON_RETRIES`, default 3) and only then POSTs `/manifest`. After that budget, it callbacks an error board so the TUI leaves the loader.
